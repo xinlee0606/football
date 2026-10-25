@@ -1,0 +1,45 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Model files (binary, large)
+models/*.joblib
+models/*.txt
+models/*.json
+
+# Cache files
+*_cache.csv
+
+# Backtest/filter results
+backtest_result.json
+backtest_filter_result.json
+backtest_filter_detail.csv
+filter_results.jsonl
+filter_bigqiu_results.jsonl
+
+# Temp/debug scripts (underscore prefix)
+_*.py
+_*.sh
+_*.ps1
+_*.bat
+
+# Windows batch files
+*.bat
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
