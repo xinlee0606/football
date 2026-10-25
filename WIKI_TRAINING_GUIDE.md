@@ -226,6 +226,339 @@ cat backtest_upside_result.json | python -m json.tool
 
 ---
 
+## 本地环境（Windows）
+
+### 环境配置
+
+| 项目 | 本地（Windows） | 服务器（Linux） |
+|------|-----------------|-----------------|
+| Python 路径 | `D:\Program Files (x86)\python311\python.exe` | `/coding/live/.venv/bin/python` |
+| 虚拟环境 | `D:\Coding\QiuSport\live\.venv` | `/coding/live/.venv` |
+| 内存 | 充足（16GB+） | 受限（3.5GB，易 OOM） |
+| 数据库 | 同一阿里云 RDS（直连） | 同一阿里云 RDS（内网） |
+| 后台执行 | 不需要 | `setsid` + `nohup` |
+| 浏览器 | Edge/Chrome | Chromium + chromedriver |
+
+### 本地依赖安装
+
+```powershell
+cd D:\Coding\QiuSport\live
+.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+> 如果国内 pip 下载慢，使用镜像源：
+> ```powershell
+> pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+> ```
+
+---
+
+## 本地训练
+
+### 前置准备
+
+```powershell
+cd D:\Coding\QiuSport\live
+
+# 清理旧缓存（必须！避免加载旧特征）
+Remove-Item features_*_cache.csv -ErrorAction SilentlyContinue
+
+# 检查是否有残留进程
+Get-Process python -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*train*' }
+```
+
+### 训练执行（逐个执行，禁止并发）
+
+```powershell
+cd D:\Coding\QiuSport\live
+
+# OVER 模型训练
+& ".venv\Scripts\python.exe" -u train_over.py
+
+# UNDER 模型训练（等待 OVER 完成后）
+& ".venv\Scripts\python.exe" -u train_under.py
+
+# UPSIDE 模型训练（等待 UNDER 完成后）
+& ".venv\Scripts\python.exe" -u train_upside.py
+```
+
+> **本地 vs 服务器区别**：
+> - 本地内存充足，不需要 `setsid` 后台执行
+> - 本地可以直接看到实时输出，不需要 `tail -f` 查看日志
+> - 本地训练速度通常比服务器快（CPU 性能更好）
+> - 模型产物保存在 `models/` 目录，带日期标签（如 `lgb_pool_20261025.txt`）
+
+### 训练输出示例
+
+```
+========================================
+  OVER 模型训练
+========================================
+加载数据: 42,156 场比赛
+特征工程: 62 个特征
+  亚盘特征: 14 个
+  大小球特征: 8 个
+  近期战绩: 29 个
+  对战往绩: 4 个
+  联赛积分: 4 个
+  其他: 3 个
+训练集: 35,833 场 (85%)
+验证集: 6,323 场 (15%)
+
+LightGBM 筛选门:
+  AUC: 0.7234  Brier: 0.2156
+  最优阈值: 0.68 (EV=+3.45)
+
+Dixon-Coles 比分矩阵:
+  rho: 0.0823
+
+融合模型 (α=0.65):
+  验证集池内命中率: 64.2%
+  验证集实现盈亏: +4.12
+
+模型已保存: models/lgb_pool_20261025.txt
+校准模型: models/calib_20261025.joblib
+元信息: models/meta_20261025.json
+========================================
+```
+
+### 本地训练注意事项
+
+1. **内存充足**：本地 16GB+ 内存，不会触发 OOM Kill
+2. **可以直接运行**：不需要 `setsid` 或 `nohup`
+3. **实时查看进度**：终端直接输出训练日志
+4. **模型文件位置**：训练产物在 `models/` 目录
+5. **缓存文件**：特征缓存在 `features_*_cache.csv`，下次训练可复用（`rebuild=False`）
+
+---
+
+## 本地回测
+
+### 回测执行
+
+```powershell
+cd D:\Coding\QiuSport\live
+
+# OVER 模型回测
+& ".venv\Scripts\python.exe" -u backtest_over.py
+
+# UNDER 模型回测
+& ".venv\Scripts\python.exe" -u backtest_under.py
+
+# UPSIDE 模型回测
+& ".venv\Scripts\python.exe" -u backtest_upside.py
+```
+
+### 查看回测结果
+
+```powershell
+# 格式化查看 JSON 结果
+Get-Content backtest_over_result.json | ConvertFrom-Json | ConvertTo-Json -Depth 10
+
+# 或直接用 Python 查看
+& ".venv\Scripts\python.exe" -c "import json; print(json.dumps(json.load(open('backtest_over_result.json')), indent=2, ensure_ascii=False))"
+```
+
+### 回测结果文件
+
+| 模型 | 输出文件 | 说明 |
+|------|----------|------|
+| OVER | `backtest_over_result.json` | 滚动回测结果（命中率/盈亏/EV） |
+| UNDER | `backtest_under_result.json` | 同上 |
+| UPSIDE | `backtest_upside_result.json` | 同上 |
+
+---
+
+## 本地预测
+
+### 预测执行
+
+```powershell
+cd D:\Coding\QiuSport\live
+
+# 预测今天比赛（默认）
+& ".venv\Scripts\python.exe" -u predict_over.py
+
+# 指定日期预测
+& ".venv\Scripts\python.exe" -u predict_over.py --date 20261025
+
+# 预测全部未开赛比赛
+& ".venv\Scripts\python.exe" -u predict_over.py --all-unfinished
+
+# 手动抬高置信度阈值
+& ".venv\Scripts\python.exe" -u predict_over.py --min-prob 0.70
+
+# 跳过邮件发送（本地调试用）
+& ".venv\Scripts\python.exe" -u predict_over.py --skip-email
+
+# 回看历史预测
+& ".venv\Scripts\python.exe" -u predict_over.py --review 20261024
+```
+
+### 预测输出示例
+
+```
+========================================
+  OVER 模型预测 - 2026-10-25
+========================================
+模型版本: lgb_pool_20261025
+特征版本: features_over (62 特征)
+预测比赛: 8 场
+
+--- 概览 ---
+[单场093] 捷甲  赫拉德茨 vs 帕尔杜比斯  (02:00)
+  池内概率: 72.3%  推荐: ★
+  Top3比分: 1:0(18.2%) 2:1(15.6%) 1:1(12.4%)
+
+[单场095] 德甲  拜仁 vs 多特  (03:30)
+  池内概率: 45.1%  推荐: ✗ (低于阈值0.60)
+  Top3比分: 2:1(14.3%) 3:1(11.8%) 2:0(10.2%)
+
+--- 汇总 ---
+推荐场次: 3 场 (阈值 0.60)
+预计命中率: 64.2% (基于回测)
+========================================
+```
+
+### 本地预测注意事项
+
+1. **数据库连接**：本地直连阿里云 RDS，需确保网络畅通
+2. **欧赔数据**：预测前会自动爬取最新欧赔数据（`scrape_euro_odds.py`）
+3. **特征重建**：预测脚本强制 `rebuild=True`，每次重建全部特征（约 3 万场）
+4. **邮件通知**：默认开启邮件发送，本地调试可用 `--skip-email` 跳过
+5. **预测结果**：同时写入 `ml_predictions.jsonl` 供后续回顾
+
+---
+
+## 部署到服务器
+
+### 完整部署流程
+
+```
+本地开发 → 本地测试 → Git 提交 → 推送到 GitHub → 服务器拉取 → 服务器运行
+```
+
+### 步骤 1：本地修改并测试
+
+```powershell
+cd D:\Coding\QiuSport\live
+
+# 修改代码后，先在本地运行验证
+& ".venv\Scripts\python.exe" -u train_over.py
+& ".venv\Scripts\python.exe" -u backtest_over.py
+& ".venv\Scripts\python.exe" -u predict_over.py --skip-email
+```
+
+### 步骤 2：Git 提交并推送
+
+```powershell
+cd D:\Coding\QiuSport\live
+
+git add .
+git commit -m "feat: 描述修改内容"
+git push origin main
+```
+
+### 步骤 3：同步代码到服务器
+
+**方式 A：服务器 Git Pull（推荐）**
+
+```bash
+# SSH 登录服务器
+ssh root@8.130.188.90
+
+# 拉取最新代码
+cd /coding/live
+git pull origin main
+```
+
+**方式 B：本地批量上传**
+
+```powershell
+cd D:\Coding\QiuSport\live
+& ".venv\Scripts\python.exe" _sync_to_server.py
+```
+
+> `_sync_to_server.py` 会自动上传所有核心文件到服务器 `/coding/live/`
+
+### 步骤 4：服务器验证
+
+```bash
+# SSH 登录服务器
+ssh root@8.130.188.90
+
+cd /coding/live
+
+# 检查文件是否更新
+ls -la train_over.py predict_over.py features_over.py
+
+# 检查语法
+.venv/bin/python -c "import train_over; print('OK')"
+.venv/bin/python -c "import predict_over; print('OK')"
+.venv/bin/python -c "import features_over; print('OK')"
+```
+
+### 步骤 5：服务器执行训练/预测
+
+```bash
+cd /coding/live
+
+# 清理缓存（如果修改了特征工程）
+rm -f features_*_cache.csv
+
+# 训练（后台执行）
+setsid bash train_over_only.sh > logs/train_over.log 2>&1 &
+tail -f logs/train_over.log
+
+# 预测（每日定时执行，也可手动）
+.venv/bin/python -u predict_over.py
+```
+
+### 步骤 6：检查定时任务
+
+```bash
+# 查看当前 crontab
+crontab -l
+
+# 编辑定时任务
+crontab -e
+
+# 参考配置（见 crontab_linux.txt）
+# 0 12 * * *  /coding/live/run_daily.sh >> /coding/live/logs/daily.log 2>&1
+# 30 18 * * *  /coding/live/.venv/bin/python -u /coding/live/predict_over.py >> /coding/live/logs/predict_over.log 2>&1
+# 0 10 * * 1  /coding/live/.venv/bin/python -u /coding/live/train_over.py >> /coding/live/logs/train_over_weekly.log 2>&1
+```
+
+### 部署检查清单
+
+- [ ] 本地代码修改并测试通过
+- [ ] Git 提交并推送到 GitHub
+- [ ] 服务器 `git pull` 或 `_sync_to_server.py` 上传
+- [ ] 服务器文件验证（`ls -la` + 语法检查）
+- [ ] 如修改特征工程：清理缓存 `rm -f features_*_cache.csv`
+- [ ] 服务器执行训练/预测验证
+- [ ] 检查定时任务是否需要更新
+- [ ] 查看日志确认运行正常
+
+---
+
+## 本地 vs 服务器命令对照表
+
+| 操作 | 本地（Windows PowerShell） | 服务器（Linux Bash） |
+|------|---------------------------|---------------------|
+| 激活虚拟环境 | `.venv\Scripts\activate` | `source .venv/bin/activate` |
+| 运行脚本 | `& ".venv\Scripts\python.exe" -u train_over.py` | `.venv/bin/python -u train_over.py` |
+| 后台执行 | 不需要 | `setsid bash train_over_only.sh > logs/train.log 2>&1 &` |
+| 查看日志 | 终端直接输出 | `tail -f logs/train_over.log` |
+| 清理缓存 | `Remove-Item features_*_cache.csv` | `rm -f features_*_cache.csv` |
+| 查看进程 | `Get-Process python` | `ps aux \| grep train \| grep -v grep` |
+| 检查内存 | 任务管理器 | `free -m` |
+| 检查 OOM | 不适用 | `dmesg \| grep -i oom \| tail -5` |
+| 同步代码 | `git push` + `_sync_to_server.py` | `git pull origin main` |
+
+---
+
 ## 常见问题
 
 ### Q: 训练进程被OOM Kill怎么办？
