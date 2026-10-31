@@ -4,9 +4,9 @@
 
 本项目包含**三套独立的 ML 预测模型**，均基于约 2.5~2.8 万场北单历史数据训练，但目标、特征工程和架构完全独立：
 
-| 维度 | OVER 八比分池模型 | UNDER 九比分池模型 | UPSIDE + 9 池两层模型 |
+| 维度 | OVER 十一比分池模型 | UNDER 九比分池模型 | UPSIDE + 9 池两层模型 |
 |------|-------------------|-------------------|-------------------|
-| **目标** | 11 比分池命中（BTTS+中低比分） | 9 比分池命中（完全对称+含零封） | 主队不败 + 9 池比分 |
+| **目标** | 11 比分池命中（BTTS+总进球≤6） | 9 比分池命中（完全对称+含零封） | 主队不败 + 9 池比分 |
 | **比分池** | 2-1/3-1/3-2/1-1/2-2/3-3/1-2/1-3/2-3/4-2/2-4 | 1-0/2-0/2-1/0-0/1-1/2-2/0-1/0-2/1-2 | 1-0/2-0/2-1/3-1/3-2/0-0/1-1/2-2/0-1 |
 | **盘口范围** | 平手/平半/半球/受让平半/受让半球 | 训练: 受让半球/半球/受让平半/平半/平手；**推荐: 仅 平手/受让平半/平半** | 仅平手/平半/半球/受让平半（机构数>12） |
 | **大小球过滤** | 下限：训练≥2.25 / **推荐≥2.50** | 上限：终盘≤3.25（不设下限） | 无 |
@@ -22,9 +22,9 @@
 
 ## OVER 模型专属特征工程（features_over.py）
 
-### 62 个特征清单（无未来函数，无技术统计，多进程并行）
+### 72 个特征清单（无未来函数，无技术统计）
 
-#### ① 亚盘（14个） — `asian_features_upside()`
+#### ① 亚盘（14个） — `asian_features()`
 | 特征 | 含义 |
 |------|------|
 | `asian_n` | 机构数 |
@@ -42,7 +42,7 @@
 | `aw_cur_diff` | 终盘主客水位差 |
 | `aw_drift` | 水位漂移（终盘水位差 − 初盘水位差） |
 
-####  大小球（8个） — `over_under_features_upside()`
+#### ② 大小球（8个） — `over_under_features()`
 | 特征 | 含义 |
 |------|------|
 | `ou_n` | 机构数 |
@@ -50,11 +50,11 @@
 | `ou_line_init_std` | 初盘大小球线分歧度 |
 | `ou_line_cur_mean` | 终盘大小球线均值 |
 | `ou_line_move` | 大小球线变化（终盘 − 初盘） |
-| `oh_init_mean` | 初盘大球赔率均值 |
-| `oh_cur_mean` | 终盘大球赔率均值 |
-| `oh_drift` | 大球赔率漂移（终盘 − 初盘） |
+| `over_prob_init` | 初盘大球隐含概率（小水/(大水+小水) 去水归一） |
+| `over_prob_cur` | 终盘大球隐含概率 |
+| `exp_total` | 期望总进球（终盘大小球线，缺失则用初盘） |
 
-#### ③ 欧赔（11个） — `euro_features_upside()`
+#### ③ 欧赔（11个） — `euro_features()`
 | 特征 | 含义 |
 |------|------|
 | `euro_n` | 欧赔公司数 |
@@ -64,7 +64,7 @@
 | `euro_return_mean` | 平均返还率 |
 | `euro_win_move` | 主胜概率变动（即时 − 初盘） |
 
-#### ④ 对战往绩（11个） — `h2h_features_upside()`
+#### ④ 对战往绩（11个） — `_h2h_features_fast()`
 | 特征 | 含义 |
 |------|------|
 | `h2h_n` | 往绩场数 |
@@ -76,12 +76,12 @@
 | `h2h_half_goal_avg` | 往绩场均半场进球（half_score 覆盖率100%） |
 | `h2h_corners_avg` | 往绩场均总角球（corners 覆盖率91%） |
 
-#### ⑤ 近10场战绩（24个） — `recent_form_features_upside()`
-主队12个（`recent_` 前缀）: `recent_n`（场数）、`recent_win_rate`（胜率）、`recent_draw_rate`（平率）、`recent_loss_rate`（负率）、`recent_goals_for_mean`（场均进球）、`recent_goals_against_mean`（场均失球）、`recent_clean_sheet_rate`（零封率）、`recent_btts_rate`（双方进球率）、`recent_over_25_rate`（大于2.5球率）、`recent_unbeaten_rate`（不败率）
+#### ⑤ 近10场战绩（20个） — `_recent_form_features_fast()`
+主队10个（`recent_` 前缀）: `recent_n`（场数）、`recent_win_rate`（胜率）、`recent_draw_rate`（平率）、`recent_loss_rate`（负率）、`recent_goals_for_mean`（场均进球）、`recent_goals_against_mean`（场均失球）、`recent_clean_sheet_rate`（零封率）、`recent_btts_rate`（双方进球率）、`recent_over_25_rate`（大于2.5球率）、`recent_unbeaten_rate`（不败率）
 
-客队12个：同上（通过 `is_home=False` 参数获取）
+客队10个：同上（通过 `is_home=False` 参数获取）
 
-####  联赛统计（8个） — `league_stats_features_upside()`
+#### ⑥ 联赛统计（8个） — `_league_stats_features_fast()`
 | 特征 | 含义 |
 |------|------|
 | `league_n` | 联赛场数 |
@@ -91,54 +91,21 @@
 | `league_over_25_rate` | 联赛大于2.5球率 |
 | `league_home_unbeaten_rate` | 联赛主队不败率 |
 
-#### ⑦ ~~技术统计（30个）~~ — 已移除（2026-10-25）
-> 技术统计特征（射门、射正、控球率、角球、危险进攻等）因覆盖率不足（全量60%）、缺失值问题导致模型效果变差，已于 2026-10-25 移除。当前 OVER 模型使用 **62 个特征**（无 tech_ 前缀特征）。
-
-#### ⑧ P0: 联赛积分榜详细特征（28个） — `_league_detailed_features()`
-主队11个（`h_ls_` 前缀）/ 客队11个（`a_ls_` 前缀）+ 差值5个 + 主场优势1个
-| 特征 | 含义 |
-|------|------|
-| `ls_played` | 联赛已赛场数 |
-| `ls_won` / `ls_drawn` / `ls_lost` | 胜/平/负场数 |
-| `ls_goals_for` / `ls_goals_against` / `ls_goal_diff` | 进球/失球/净胜球 |
-| `ls_gf_avg` / `ls_ga_avg` | 场均进球/场均失球 |
-| `ls_ppg` | 场均积分 |
-| `ls_win_rate` | 胜率 |
-| `ls_home_advantage` | 主场进球优势（主队主场场均进球 − 主队客场场均进球） |
-
-#### ⑨ P1: 交锋初始盘口特征（5个） — `_h2h_initial_handicap_features()`
-| 特征 | 含义 |
-|------|------|
-| `h2h_initial_handicap_avg` | 往绩平均初始盘口（数值化） |
-| `h2h_home_odds_avg` / `h2h_away_odds_avg` | 往绩平均主胜/客胜赔率 |
-| `h2h_handicap_win_rate` | 往绩让球赢盘率 |
-| `h2h_over_rate` | 往绩大球率 |
-
-#### ⑩ P2: 页面盘口/排名特征（5个） — `_page_features()`
-| 特征 | 含义 |
-|------|------|
-| `page_handicap` | 页面显示盘口（数值化） |
-| `page_goals` | 页面显示大小球线 |
-| `home_rank` / `away_rank` | 主队/客队排名 |
-| `rank_diff` | 排名差（主队 − 客队） |
-
 ### 特征提取流程
 
-1. **逐场构建**: 遍历 `match` 表每场比赛，依次调用各特征函数，合并为一行
-2. **缓存**: 产物写入 `features_over_cache.csv`；后续调用 `load_or_build_over(rebuild=False)` 优先读缓存
-3. **SQL预聚合**: 欧赔数据使用 GROUP BY 预聚合降低内存占用
+1. **批量加载**: 一次性加载 6 张源表（match, asian_odds, over_under_odds, european_odds, head_to_head, match历史数据），按 match_id 分组为 dict，避免逐场查库
+2. **逐场构建**: 遍历每场比赛，依次调用各特征函数，合并为一行
+3. **缓存**: 产物写入 `features_over_cache.csv`；后续调用 `load_or_build_over(rebuild=False)` 优先读缓存
 
 ### 数据源表
 
 | 源表 | 特征函数 | 说明 |
 |------|----------|------|
-| `asian_odds` | `asian_features_upside()` | 15家机构初盘+终盘亚盘 |
-| `over_under_odds` | `over_under_features_upside()` | 16家机构初盘+终盘大小球 |
-| `european_odds` | `euro_features_upside()` | 欧赔(胜/平/负初盘+即时, 数据源 `scrape_euro_odds.py`) |
-| `head_to_head` | `h2h_features_upside()` / `_h2h_initial_handicap_features()` | 对赛往绩（含半场比分、角球、初始盘口） |
-| `match` | `recent_form_features_upside()` / `league_stats_features_upside()` / `_page_features()` | 近期战绩 + 联赛统计 + 页面盘口/排名 |
-| `league_standings` | `_league_detailed_features()` | P0: 详细积分榜（主/客队场均进球、失球、积分等） |
-| `recent_form` | `_tech_stats_features_fast()` | 技术统计（射门、射正、控球、角球、进攻、犯规、传球） |
+| `asian_odds` | `asian_features()` | 亚盘初盘+终盘盘口/水位 |
+| `over_under_odds` | `over_under_features()` | 大小球初盘+终盘线/赔率 |
+| `european_odds` | `euro_features()` | 欧赔胜/平/负初盘+即时（数据源 `scrape_euro_odds.py`） |
+| `head_to_head` | `_h2h_features_fast()` | 对赛往绩（含半场比分、角球） |
+| `match` | `_recent_form_features_fast()` / `_league_stats_features_fast()` | 近期战绩 + 联赛统计 |
 
 ### 防数据泄漏
 
@@ -210,7 +177,6 @@ RHO_GRID = [-0.30, -0.28, ..., 0.00, ..., 0.28, 0.30]  # 步长 0.02
 
 ```bash
 # 服务器执行（本机连不上阿里云 RDS）
-./venv/bin/python -u probe_data.py      # 1. 数据摸底: 8池基线命中率/比分分布/覆盖率 -> baseline_report.json
 .venv/bin/python -u backtest_over.py     # 1. 滚动前进回测(前70%起步按月扩窗重训) -> backtest_over_result.json
 .venv/bin/python -u train_over.py      # 2. 全量训练生成生产模型 -> models/ (带日期tag+latest.json)
 .venv/bin/python -u predict_over.py      # 3. 每日预测

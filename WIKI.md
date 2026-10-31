@@ -12,7 +12,7 @@
 - **智能去重** 基于 `site_match_id` 防止同一场比赛重复爬取
 - **数据清洗** 自动清理球队名称中的排名数字、"(中)"标记等
 - **MySQL存储** 结构化数据入库，支持后续分析
-- **OVER/UNDER/UPSIDE比分预测系统** LightGBM筛选门 + Dixon-Coles比分矩阵，三模型独立训练与预测
+- **OVER/UNDER/UPSIDE比分预测系统** LightGBM筛选门 + Dixon-Coles比分矩阵，三模型独立训练与预测（OVER:11比分池BTTS+总进球≤6, UNDER:9比分池完全对称, UPSIDE:两层模型）
 
 ---
 
@@ -29,9 +29,9 @@ live/
 ├── predict_scores.py      # 六比分预测模块（历史频率Top6优先, 定方向→定进球数→锁比分回退）
 ├── backtest.py            # 六比分命中率时间序回测框架（无未来函数, 方法A/B/C对比）
 ├── sp_scraper.py          # 北单开奖SP值回填爬虫（数据源: 500彩票网, result_sp表）
-── features_over.py            # OVER特征工程（62特征，无技术统计，多进程并行，缓存features_over_cache.csv）
-├── features_under.py           # UNDER特征工程（62特征，无技术统计，多进程并行，缓存features_under_cache.csv）
-├── features_upside.py          # UPSIDE特征工程（主客场拆分，缓存features_upside_cache.csv）
+├── features_over.py            # OVER特征工程（72特征，无技术统计，缓存features_over_cache.csv）
+├── features_under.py           # UNDER特征工程（72特征，无技术统计，缓存features_under_cache.csv）
+├── features_upside.py          # UPSIDE特征工程（74特征，缓存features_upside_cache.csv）
 ├── probe_data.py          # ML数据摸底（9池基线命中率/比分分布/覆盖率, 产出baseline_report.json）
 ├── train_over.py          # OVER模型训练（LightGBM+Dixon-Coles混合, 按EV选阈值, 模型存models/）
 ├── train_under.py         # UNDER模型训练（同OVER架构）
@@ -445,7 +445,8 @@ python -u sp_scraper.py --match               # 只做match_id匹配(不爬取)
 用约2.5万场北单历史数据训练混合机器学习模型，筛选最终比分落在 **9比分池** 中的比赛并输出各比分概率，以期望收益（EV）为优化目标。与六比分预测（规则法）并行，是独立的 ML 方案。
 
 > 9比分池 `UNDER`：`1:0 / 2:0 / 2:1 / 0:0 / 1:1 / 2:2 / 0:1 / 0:2 / 1:2`（主胜低比分 + 平局 + 客胜低比分，对称覆盖）
-> 定义在 `features_upside.py`，换池只需改该常量并重跑基线/回测/训练。
+> 11比分池 `OVER`：`2:1 / 3:1 / 3:2 / 1:1 / 2:2 / 3:3 / 1:2 / 1:3 / 2:3 / 4:2 / 2:4`（双方进球BTTS + 总进球≤6）
+> 定义分别在 `features_under.py` 和 `features_over.py`，换池只需改常量并重跑基线/回测/训练。
 
 ### 模型架构（两阶段混合）
 | 组件 | 模型 | 作用 |
@@ -457,7 +458,7 @@ python -u sp_scraper.py --match               # 只做match_id匹配(不爬取)
 | 校准 | Isotonic回归 | 融合概率校准为真实命中率 |
 | 阈值 | 按EV选取 | 每场6注各1元：命中=SP-6，未中=-6，选EV最优的P_pool阈值 |
 
-### 特征工程（features_upside.py，62个特征，无未来函数）
+### 特征工程（72个特征，无未来函数）
 
 #### 提取流程
 1. **`load_raw(cursor)`**: 一次性全量查询 6 张源表（`match`/`asian_odds`/`over_under_odds`/`recent_form`/`head_to_head`/`league_standings`/`result_sp`），按 `match_id` 分组为 dict，避免逐场查库
@@ -468,16 +469,15 @@ python -u sp_scraper.py --match               # 只做match_id匹配(不爬取)
 #### 数据源表
 | 源表 | 特征函数 | 说明 |
 |------|----------|------|
-| `asian_odds` | `asian_features_upside()` | 15家机构初盘+终盘亚盘 |
-| `over_under_odds` | `ou_features_upside()` | 16家机构初盘+终盘大小球 |
-| `recent_form` (is_current_match=0) | `_recent_team_features_upside()` | 双队各近10场战绩+技术统计 |
-| `head_to_head` | `h2h_features_upside()` | 对赛往绩 |
-| `league_standings` | `_standings_features_upside()` | 联赛积分排名(总/近6) |
-| `result_sp` | `load_raw()` 直接取 | 赛果比分开奖SP（仅作为元信息列，不参与特征） |
+| `asian_odds` | `asian_features()` | 亚盘初盘+终盘盘口/水位 |
+| `over_under_odds` | `over_under_features()` | 大小球初盘+终盘线/赔率 |
+| `european_odds` | `euro_features()` | 欧赔胜/平/负初盘+即时 |
+| `head_to_head` | `_h2h_features_fast()` | 对赛往绩（含半场比分、角球） |
+| `match` | `_recent_form_features_fast()` / `_league_stats_features_fast()` | 近期战绩 + 联赛统计 | |
 
 #### 全部62个特征清单
 
-**① 亚盘（14个）** — `asian_features_upside()`
+#### ① 亚盘（14个） — `asian_features()`
 | 特征 | 含义 |
 |------|------|
 | `asian_n` | 机构数 |
@@ -495,7 +495,7 @@ python -u sp_scraper.py --match               # 只做match_id匹配(不爬取)
 | `aw_cur_diff` | 终盘主客水位差 |
 | `aw_drift` | 水位漂移（终盘水位差 − 初盘水位差） |
 
-**② 大小球（8个）** — `ou_features_upside()`
+**② 大小球（8个）** — `over_under_features()`
 | 特征 | 含义 |
 |------|------|
 | `ou_n` | 机构数 |
@@ -507,39 +507,44 @@ python -u sp_scraper.py --match               # 只做match_id匹配(不爬取)
 | `over_prob_cur` | 终盘大球隐含概率 |
 | `exp_total` | 期望总进球（取终盘线，无则回退初盘线） |
 
-**③ 期望进球先验（3个）** — `goal_expectation()` 由亚盘+大小球推导
+**④ 期望进球先验（3个）** — 由亚盘+大小球推导
+
+**③ 欧赔（11个）** — `euro_features()`
 | 特征 | 含义 |
 |------|------|
 | `home_adv` | 主队让球优势（= `ah_cur_mean`，正=主队占优） |
 | `exp_home` | 主队期望进球（总进球/2 + 让球×0.55） |
 | `exp_away` | 客队期望进球（总进球/2 − 让球×0.55） |
 
-**④ 近10场战绩（24+5=29个）** — `_recent_team_features_upside()` 双队各12个 + 5个差值/组合
-主队12个（`h_` 前缀）: `h_rf_n`（场数）、`h_rf_ppg`（场均积分）、`h_rf_ppg5`（近5场场均积分）、`h_rf_gf`（场均进球）、`h_rf_ga`（场均失球）、`h_rf_total`（场均总进球）、`h_rf_small_rate`（小球率≤2球）、`h_rf_under_rate`（大小球口径小球率）、`h_rf_hc_win_rate`（让球赢率）、`h_rf_sot_rate`（射正率=射正/射门）、`h_rf_poss`（控球率）、`h_rf_home_share`（主场占比）
+**⑤ 近10场战绩（20个）** — `_recent_form_features_fast()` 双队各10个
+主队10个（`recent_` 前缀）: `recent_n`（场数）、`recent_win_rate`（胜率）、`recent_draw_rate`（平率）、`recent_loss_rate`（负率）、`recent_goals_for_mean`（场均进球）、`recent_goals_against_mean`（场均失球）、`recent_clean_sheet_rate`（零封率）、`recent_btts_rate`（双方进球率）、`recent_over_25_rate`（大于2.5球率）、`recent_unbeaten_rate`（不败率）
 
-客队12个（`a_` 前缀）: 同上
+客队10个（同上，通过 `is_home=False` 参数获取）
 
-双队差值/组合（5个）: `gf_diff`（进球差）、`ga_diff`（失球差）、`ppg_diff`（积分差）、`small_rate_avg`（小球率均值）、`recent_total_goals`（近期场均总进球均值）
-
-**⑤ 对战往绩（4个）** — `h2h_features_upside()`
+**⑥ 对战往绩（11个）** — `_h2h_features_fast()`
 | 特征 | 含义 |
 |------|------|
 | `h2h_n` | 往绩场数 |
-| `h2h_goal_avg` | 往绩场均总进球 |
-| `h2h_pool_share` | 往绩池内比分占比（落在 UNDER 的场次占比） |
-| `h2h_home_win_rate` | 往绩当前主队胜率 |
+| `h2h_home_win_rate` / `h2h_draw_rate` / `h2h_away_win_rate` | 往绩主/平/客胜率 |
+| `h2h_avg_goals` | 往绩场均总进球 |
+| `h2h_home_goals_mean` / `h2h_away_goals_mean` | 往绩主/客队场均进球 |
+| `h2h_btts_rate` | 往绩双方进球率 |
+| `h2h_over_25_rate` | 往绩大于2.5球率 |
+| `h2h_half_goal_avg` | 往绩场均半场进球 |
+| `h2h_corners_avg` | 往绩场均总角球 |
 
-**⑥ 联赛积分+先验（4个）** — `_standings_features_upside()` + 累积先验
+**⑦ 联赛统计（8个）** — `_league_stats_features_fast()`
 | 特征 | 含义 |
 |------|------|
-| `rank_diff` | 总排名差（主队排名 − 客队排名，负=主队排名更靠前） |
-| `points_diff` | 总积分差（主队总积分 − 客队总积分） |
-| `recent6_points_diff` | 近6场积分差 |
-| `league_pool_prior` | 联赛池内命中率累积先验（平滑公式：`(命中+20×0.55)/(场数+20)`，只用该场之前的完场数据） |
+| `league_n` | 联赛场数 |
+| `league_home_win_rate` / `league_draw_rate` / `league_away_win_rate` | 联赛主/平/客胜率 |
+| `league_avg_goals` | 联赛场均总进球 |
+| `league_btts_rate` | 联赛双方进球率 |
+| `league_over_25_rate` | 联赛大于2.5球率 |
+| `league_home_unbeaten_rate` | 联赛主队不败率 |
 
 #### 防数据泄漏
 - `feature_columns()` 显式排除标签/辅助列（`y`、`home_goals`、`away_goals`、`in_pool`、`score`、`sp` 等元信息列），`train_models()` 入口护栏发现特征混入标签列直接报错拒绝训练
-- 联赛先验按 `match_id` 升序逐场累积，只用该场之前的完场数据
 - 比分格式兼容：`is_finished()` 同时识别 `1-0`（数据库实际存储，完场页抓取）与 `1:0` 两种写法；`norm_score()` 统一转为横杠格式
 - 缓存到 `features_upside_cache.csv`，修改比分池/特征/标签后需删除缓存强制重建
 
