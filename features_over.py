@@ -23,8 +23,8 @@ import pandas as pd
 from config import DB_CONFIG
 
 # ==================== 常量 ====================
-# OVER模型专用 OVER：完全对称（主胜3+平局3+客胜3），按全库赛果频率Top9选取（2026-10-12重构）
-OVER = ['1-0', '2-0', '2-1', '0-0', '1-1', '2-2', '0-1', '0-2', '1-2']
+# OVER模型专用：BTTS双方进球 + 总进球≤6（11种比分）
+OVER = ['2-1', '3-1', '3-2', '1-1', '2-2', '3-3', '1-2', '1-3', '2-3', '4-2', '2-4']
 OVER_SET = set(OVER)
 
 # 别名（兼容train_over.py等脚本的导入）
@@ -39,10 +39,9 @@ TARGET_HANDICAP_NUMS_OVER = {-0.5, 0.5, -0.25, 0.25, 0.0}
 PREDICT_HANDICAPS_OVER = ['平手', '受让平/半', '平/半']
 PREDICT_HANDICAP_NUMS_OVER = {0.0, -0.25, 0.25}
 
-# 大小球线上限阈值（2026-10-13 新增: 排除"进球大战"死区）
-# 全库分档显示 OVER 池内命中率随大小球线单调下降, OU>3.25 档 ROI 崩至~0(低分池难命中),
-# 故训练/回测/预测统一过滤掉终盘大小球线 > 3.25 的比赛; 数据缺失则不误杀(保留)。
-MAX_OU_LINE_OVER = 3.25
+# 大小球线阈值：初盘和终盘均 >= MIN_OU_LINE_OVER（2026-10-31 修改）
+# 无上限过滤，下限2.25确保比赛有足够进球预期
+MIN_OU_LINE_OVER = 2.25
 
 
 def is_target_handicap_over(ah_cur_mean, ah_init_mean=None):
@@ -73,17 +72,28 @@ def is_cup_league_over(league):
 
 
 def is_valid_ou_line_over(ou_line_cur_mean, ou_line_init_mean=None):
-    """判断大小球线是否满足上限(排除进球大战死区): 终盘线(缺失用初盘) <= MAX_OU_LINE_OVER
-    初终盘均缺失时返回 True(不因数据缺失误杀比赛)。"""
-    v = ou_line_cur_mean
-    if v is None:
-        v = ou_line_init_mean
-    if v is None:
+    """判断大小球线是否满足下限: 初盘和终盘均 >= MIN_OU_LINE_OVER
+    任一缺失时不杀(保留比赛)。"""
+    v_cur = ou_line_cur_mean
+    v_init = ou_line_init_mean
+    # 终盘缺失时用初盘
+    if v_cur is None:
+        v_cur = v_init
+    # 初盘缺失时用终盘
+    if v_init is None:
+        v_init = v_cur
+    # 两者都缺失则保留
+    if v_cur is None:
         return True
     try:
-        return float(v) <= MAX_OU_LINE_OVER
+        cur_ok = float(v_cur) >= MIN_OU_LINE_OVER
     except (ValueError, TypeError):
-        return True
+        cur_ok = True
+    try:
+        init_ok = float(v_init) >= MIN_OU_LINE_OVER if v_init is not None else True
+    except (ValueError, TypeError):
+        init_ok = True
+    return cur_ok and init_ok
 
 
 # 元信息列(非特征列)
@@ -977,12 +987,47 @@ def build_features_over(conn):
             h2h_matches, home_team_matches, away_team_matches, league_matches
         ))
     
-    # Parallel feature computation
-    with Pool(processes=num_workers) as pool:
-        all_rows = pool.map(_compute_single_match_features, tasks, chunksize=100)
-    
+    # Sequential feature computation (faster on Windows due to no memory copy overhead)
+    total = len(df)
+    print(f"⏳ 构建特征... (共{total}场)")
+    all_rows = []
+    for idx, row in df.iterrows():
+        mid = row['match_id']
+        home = row['home_team']
+        away = row['away_team']
+        league = row['league']
+
+        # 从内存中获取盘口数据
+        af = asian_features(asian_map.get(mid, []))
+        ouf = over_under_features(ou_map.get(mid, []))
+        ef = euro_features(euro_map.get(mid, []))
+
+        # 历史交锋 (使用预建索引)
+        team_pair = tuple(sorted([home, away]))
+        h2h_data = h2h_matches.get(team_pair, [])
+        h2hf = _h2h_features_fast(home, away, h2h_data)
+        
+        # 近期战绩 (使用预建索引)
+        home_recent_data = home_team_matches.get(home, [])[-10:]
+        home_recent = _recent_form_features_fast(home, home_recent_data, is_home=True)
+        away_recent_data = away_team_matches.get(away, [])[-10:]
+        away_recent = _recent_form_features_fast(away, away_recent_data, is_home=False)
+        
+        # 联赛统计 (使用预建索引)
+        league_data = league_matches.get(league, [])
+        league_stats = _league_stats_features_fast(league, league_data)
+
+        # 合并所有特征
+        feat_row = {**af, **ouf, **ef, **h2hf, **home_recent, **away_recent, **league_stats}
+        meta_row = row.to_dict()
+        all_rows.append({**meta_row, **feat_row})
+
+        # 进度显示 (每 1000 场)
+        if (idx + 1) % 1000 == 0:
+            print(f"  已处理 {idx + 1}/{total} 场")
+
     result_df = pd.DataFrame(all_rows)
-    print(f"Feature building complete: {len(result_df)} matches")
+    print(f"✓ 特征构建完成：{len(result_df)}场")
     return result_df
 
 

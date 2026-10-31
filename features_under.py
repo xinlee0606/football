@@ -1010,24 +1010,47 @@ def build_features_under(conn):
     
     print(f"✓ 索引构建完成")
 
-    # 8. Parallel feature computation (multiprocessing)
-    num_workers = min(cpu_count() - 1, 6)  # Use up to 6 processes
-    print(f"Building features... ({len(df)} matches, {num_workers} parallel processes)")
-    
-    # Prepare parallel computation tasks
-    tasks = []
+    # Sequential feature computation (faster on Windows due to no memory copy overhead)
+    total = len(df)
+    print(f" 构建特征... (共{total}场)")
+    all_rows = []
     for idx, row in df.iterrows():
-        tasks.append((
-            idx, row.to_dict(), asian_map, ou_map, euro_map,
-            h2h_matches, home_team_matches, away_team_matches, league_matches
-        ))
-    
-    # Parallel feature computation
-    with Pool(processes=num_workers) as pool:
-        all_rows = pool.map(_compute_single_match_features, tasks, chunksize=100)
-    
+        mid = row['match_id']
+        home = row['home_team']
+        away = row['away_team']
+        league = row['league']
+
+        # 从内存中获取盘口数据
+        af = asian_features(asian_map.get(mid, []))
+        ouf = over_under_features(ou_map.get(mid, []))
+        ef = euro_features(euro_map.get(mid, []))
+
+        # 历史交锋 (使用预建索引)
+        team_pair = tuple(sorted([home, away]))
+        h2h_data = h2h_matches.get(team_pair, [])
+        h2hf = _h2h_features_fast(home, away, h2h_data)
+        
+        # 近期战绩 (使用预建索引)
+        home_recent_data = home_team_matches.get(home, [])[-10:]
+        home_recent = _recent_form_features_fast(home, home_recent_data, is_home=True)
+        away_recent_data = away_team_matches.get(away, [])[-10:]
+        away_recent = _recent_form_features_fast(away, away_recent_data, is_home=False)
+        
+        # 联赛统计 (使用预建索引)
+        league_data = league_matches.get(league, [])
+        league_stats = _league_stats_features_fast(league, league_data)
+
+        # 合并所有特征
+        feat_row = {**af, **ouf, **ef, **h2hf, **home_recent, **away_recent, **league_stats}
+        meta_row = row.to_dict()
+        all_rows.append({**meta_row, **feat_row})
+
+        # 进度显示 (每 1000 场)
+        if (idx + 1) % 1000 == 0:
+            print(f"  已处理 {idx + 1}/{total} 场")
+
     result_df = pd.DataFrame(all_rows)
-    print(f"Feature building complete: {len(result_df)} matches")
+    print(f"✓ 特征构建完成：{len(result_df)}场")
     return result_df
 
 

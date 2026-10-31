@@ -162,10 +162,10 @@ def prepare_data(df, end_date=None, handicap_filter=True):
         print(f"盘口筛选(目标: {TARGET_HANDICAPS_OVER}): {before} -> {len(d)}场")
         # 2. 大小球线筛选（初盘和终盘均 >= 2.25）
         mask_ou = d.apply(lambda r: is_valid_ou_line_over(
-            r.get('ou_line_init_mean'), r.get('ou_line_cur_mean')), axis=1)
+            r.get('ou_line_cur_mean'), r.get('ou_line_init_mean')), axis=1)
         before = len(d)
         d = d[mask_ou]
-        print(f"大小球筛选(>= 2.25): {before} -> {len(d)}场")
+        print(f"大小球筛选(初终盘均>=2.25): {before} -> {len(d)}场")
         # 3. 排除杯赛
         mask_no_cup = ~d['league'].apply(is_cup_league_over)
         before = len(d)
@@ -323,7 +323,12 @@ def predict_rows(model, df):
     p_lgb/p_dc/p_pool(校准后)/lambda_home/lambda_away/top_picks(比分:概率;...)/ev_model"""
     d = df.copy()
     feats = model['feats']
-    X = d[feats]   # 保留列名(与训练时一致, 避免sklearn特征名校验警告)
+    # 只使用数据框中实际存在的特征（兼容不同版本的特征集）
+    available_feats = [f for f in feats if f in d.columns]
+    missing_feats = [f for f in feats if f not in d.columns]
+    if missing_feats:
+        print(f"⚠ 模型期望{len(feats)}个特征，数据框只有{len(available_feats)}个，缺少{len(missing_feats)}个：{missing_feats[:5]}...")
+    X = d[available_feats]   # 保留列名 (与训练时一致，避免 sklearn 特征名校验警告)
     d['p_lgb'] = _proba_pool(model['clf'], X)
     d['lambda_home'] = np.clip(model['goals']['home'].predict(X), 0.1, 4.5)
     d['lambda_away'] = np.clip(model['goals']['away'].predict(X), 0.1, 4.5)

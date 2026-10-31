@@ -27,7 +27,7 @@ import numpy as np
 import pymysql
 
 from config import DB_CONFIG, EMAIL_CONFIG, ENABLE_EMAIL
-from features_over import OVER, OVER_SET, is_target_handicap_over, is_valid_ou_line_predict_over, is_cup_league_over, is_finished, load_or_build_over, parse_score
+from features_over import OVER, OVER_SET, is_target_handicap_over, is_valid_ou_line_over, is_cup_league_over, is_finished, load_or_build_over, parse_score
 from incremental_features import load_features_incremental
 from train_over import (MODEL_DIR, TOP_PICKS, dc_matrix, load_model,
                          matrix_pool_scores, predict_rows)
@@ -383,7 +383,7 @@ def backfill(target_date, min_prob=None):
     sub = sub[hc_mask]
     # 大小球线筛选(推荐窄口径: 初盘和终盘均 >= 2.75)
     ou_mask = sub.apply(
-        lambda r: is_valid_ou_line_predict_over(r.get('ou_line_init_mean'), r.get('ou_line_cur_mean')),
+        lambda r: is_valid_ou_line_over(r.get('ou_line_init_mean'), r.get('ou_line_cur_mean')),
         axis=1)
     sub = sub[ou_mask]
     # 排除杯赛
@@ -489,7 +489,7 @@ def main():
     unfinished = unfinished[handicap_mask]
     # 大小球线筛选（推荐窄口径: 初盘和终盘均 >= 2.75; 训练仍用宽口径 MIN_OU_LINE_OVER=2.25）
     ou_mask = unfinished.apply(
-        lambda r: is_valid_ou_line_predict_over(r.get('ou_line_init_mean'), r.get('ou_line_cur_mean')),
+        lambda r: is_valid_ou_line_over(r.get('ou_line_init_mean'), r.get('ou_line_cur_mean')),
         axis=1)
     before_ou = len(unfinished)
     unfinished = unfinished[ou_mask]
