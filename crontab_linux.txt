@@ -1,0 +1,35 @@
+# Linux crontab 定时任务配置
+# 安装方法：
+#   方法1: crontab -e 手动添加下面的行
+#   方法2: 运行 ./setup_linux_cron.sh 自动安装
+#
+# 注意：将 /opt/live 替换为实际项目部署路径
+
+# 任务1+2：每天中午12:00执行 更新前一天比赛状态+爬取当天比赛（run_daily.sh内部先状态后爬取，爬取带防重入锁）
+0 12 * * * /opt/live/run_daily.sh >> /opt/live/logs/daily.log 2>&1
+
+# 任务3：每天下午18:00执行比赛筛选并发送邮件
+0 18 * * * cd /opt/live && /opt/live/.venv/bin/python filter_matches.py >> /opt/live/logs/filter.log 2>&1
+
+# 任务 4：每天晚上 21:30 执行 ML 比分预测 (混合模型，依赖 models/目录下最新模型)
+# 阈值说明：固定使用--min-prob 0.70 覆盖模型 EV 阈值，避免模型算出过高阈值 (如 0.80) 导致空仓
+30 21 * * * cd /opt/live && /opt/live/.venv/bin/python -u predict_ml.py --min-prob 0.70 >> /opt/live/logs/predict_ml.log 2>&1
+
+# 任务7：每天中午12:40回顾昨天预测命中(读ml_predictions.jsonl对照实际比分, 结果邮件发送)
+40 12 * * * cd /opt/live && /opt/live/.venv/bin/python -u predict_ml.py --review >> /opt/live/logs/review.log 2>&1
+
+# 任务5：每周一上午10:00全量重训模型(持续学习: 新比赛数据自然累积进训练集)
+0 10 * * 1 cd /opt/live && /opt/live/.venv/bin/python -u train_model.py >> /opt/live/logs/train_ml.log 2>&1
+
+# 任务6：每天凌晨00:40回填昨天的完场页盘口数据(page_handicap/page_goals, 回测与筛选条件9依赖)
+# 断更补齐: 若page_handicap停更过, 手动跑一次区间回填, 如 ./run_history.sh 20260805 20260824
+40 0 * * * cd /opt/live && /opt/live/.venv/bin/python -u history_scraper.py 1 >> /opt/live/logs/history_daily.log 2>&1
+
+# 任务8：每天中午12:50回顾昨天常规版筛选结果(读filter_results.jsonl对照实际比分+SP, 邮件发送)
+50 12 * * * cd /opt/live && /opt/live/.venv/bin/python -u filter_matches.py --review >> /opt/live/logs/review_filter.log 2>&1
+
+# 任务 9：每天下午 13:00 回顾昨天大球版筛选结果 (读 filter_bigqiu_results.jsonl 对照实际比分+SP, 邮件发送)
+0 13 * * * cd /opt/live && /opt/live/.venv/bin/python -u filter_matches_bigqiu.py --review >> /opt/live/logs/review_filter_bigqiu.log 2>&1
+
+# 任务 10：每天下午 18:30 执行 1X+8 池模型预测（自动包含前一天回顾，在筛选任务之后）
+30 18 * * * cd /opt/live && /opt/live/.venv/bin/python -u predict_1x.py >> /opt/live/logs/predict_1x.log 2>&1

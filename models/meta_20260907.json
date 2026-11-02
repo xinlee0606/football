@@ -1,0 +1,133 @@
+{
+ "tag": "20260907",
+ "trained_at": "2026-09-07 13:00:12",
+ "features": [
+  "asian_n",
+  "ah_init_mean",
+  "ah_init_std",
+  "ah_init_flat_share",
+  "ah_cur_mean",
+  "ah_cur_std",
+  "ah_cur_flat_share",
+  "ah_move",
+  "ah_move_up_share",
+  "cover_prob_init",
+  "cover_prob_cur",
+  "aw_init_diff",
+  "aw_cur_diff",
+  "aw_drift",
+  "ou_n",
+  "ou_line_init_mean",
+  "ou_line_init_std",
+  "ou_line_cur_mean",
+  "ou_line_move",
+  "over_prob_init",
+  "over_prob_cur",
+  "exp_total",
+  "home_adv",
+  "exp_home",
+  "exp_away",
+  "h_rf_n",
+  "h_rf_ppg",
+  "h_rf_ppg5",
+  "h_rf_gf",
+  "h_rf_ga",
+  "h_rf_total",
+  "h_rf_small_rate",
+  "h_rf_under_rate",
+  "h_rf_hc_win_rate",
+  "h_rf_sot_rate",
+  "h_rf_poss",
+  "h_rf_home_share",
+  "a_rf_n",
+  "a_rf_ppg",
+  "a_rf_ppg5",
+  "a_rf_gf",
+  "a_rf_ga",
+  "a_rf_total",
+  "a_rf_small_rate",
+  "a_rf_under_rate",
+  "a_rf_hc_win_rate",
+  "a_rf_sot_rate",
+  "a_rf_poss",
+  "a_rf_home_share",
+  "gf_diff",
+  "ga_diff",
+  "ppg_diff",
+  "small_rate_avg",
+  "recent_total_goals",
+  "h2h_n",
+  "h2h_goal_avg",
+  "h2h_pool_share",
+  "h2h_home_win_rate",
+  "rank_diff",
+  "points_diff",
+  "recent6_points_diff",
+  "league_pool_prior"
+ ],
+ "alpha": 0.0,
+ "rho": -0.02,
+ "threshold": 0.8,
+ "metrics": {
+  "valid_auc": 0.6618,
+  "valid_brier": 0.1904,
+  "valid_pool_rate": 0.7034,
+  "valid_n": 4043
+ },
+ "ev_curve": [
+  {
+   "threshold": 0.5,
+   "n": 3822,
+   "pool_hit_rate": 0.7263,
+   "ev_per_match": 1.342
+  },
+  {
+   "threshold": 0.55,
+   "n": 3539,
+   "pool_hit_rate": 0.7423,
+   "ev_per_match": 1.353
+  },
+  {
+   "threshold": 0.6,
+   "n": 3469,
+   "pool_hit_rate": 0.746,
+   "ev_per_match": 1.348
+  },
+  {
+   "threshold": 0.65,
+   "n": 3262,
+   "pool_hit_rate": 0.7551,
+   "ev_per_match": 1.384
+  },
+  {
+   "threshold": 0.7,
+   "n": 2528,
+   "pool_hit_rate": 0.7757,
+   "ev_per_match": 1.292
+  },
+  {
+   "threshold": 0.75,
+   "n": 1705,
+   "pool_hit_rate": 0.8088,
+   "ev_per_match": 1.479
+  },
+  {
+   "threshold": 0.8,
+   "n": 728,
+   "pool_hit_rate": 0.8516,
+   "ev_per_match": 1.842
+  }
+ ],
+ "top_picks": 6,
+ "pool9": [
+  "1-0",
+  "2-0",
+  "2-1",
+  "0-0",
+  "1-1",
+  "2-2",
+  "0-1",
+  "0-2",
+  "1-2"
+ ]
+}

@@ -1,0 +1,226 @@
+{
+  "generated_at": "2026-10-31 23:25:46",
+  "train_ratio": 0.7,
+  "samples": 5750,
+  "pool": "UNDER",
+  "pool_scores": [
+    "1-0",
+    "2-0",
+    "2-1",
+    "0-0",
+    "1-1",
+    "2-2",
+    "0-1",
+    "0-2",
+    "1-2"
+  ],
+  "top_picks": 9,
+  "sp_coverage": "5469/5750",
+  "threshold_sensitivity": [
+    {
+      "threshold": 0.5,
+      "n": 5286,
+      "coverage": 0.9193,
+      "pool_hit_rate": 0.7433,
+      "top9_hit_rate": 0.7433,
+      "realized_profit_per_match": 1.605,
+      "model_ev_per_match": 10.36
+    },
+    {
+      "threshold": 0.55,
+      "n": 5159,
+      "coverage": 0.8972,
+      "pool_hit_rate": 0.7469,
+      "top9_hit_rate": 0.7469,
+      "realized_profit_per_match": 1.597,
+      "model_ev_per_match": 10.242
+    },
+    {
+      "threshold": 0.6,
+      "n": 5009,
+      "coverage": 0.8711,
+      "pool_hit_rate": 0.7485,
+      "top9_hit_rate": 0.7485,
+      "realized_profit_per_match": 1.559,
+      "model_ev_per_match": 10.326
+    },
+    {
+      "threshold": 0.65,
+      "n": 4736,
+      "coverage": 0.8237,
+      "pool_hit_rate": 0.7532,
+      "top9_hit_rate": 0.7532,
+      "realized_profit_per_match": 1.526,
+      "model_ev_per_match": 10.404
+    },
+    {
+      "threshold": 0.7,
+      "n": 4113,
+      "coverage": 0.7153,
+      "pool_hit_rate": 0.7698,
+      "top9_hit_rate": 0.7698,
+      "realized_profit_per_match": 1.636,
+      "model_ev_per_match": 10.718
+    },
+    {
+      "threshold": 0.75,
+      "n": 2429,
+      "coverage": 0.4224,
+      "pool_hit_rate": 0.7991,
+      "top9_hit_rate": 0.7991,
+      "realized_profit_per_match": 1.541,
+      "model_ev_per_match": 11.513
+    },
+    {
+      "threshold": 0.8,
+      "n": 1896,
+      "coverage": 0.3297,
+      "pool_hit_rate": 0.8149,
+      "top9_hit_rate": 0.8149,
+      "realized_profit_per_match": 1.44,
+      "model_ev_per_match": 11.821
+    }
+  ],
+  "monthly": [
+    {
+      "month": "202501",
+      "n": 11,
+      "baseline_pool_rate": 0.7273,
+      "selected": 11,
+      "selected_pool_rate": 0.7273
+    },
+    {
+      "month": "202502",
+      "n": 109,
+      "baseline_pool_rate": 0.7248,
+      "selected": 96,
+      "selected_pool_rate": 0.7396
+    },
+    {
+      "month": "202503",
+      "n": 212,
+      "baseline_pool_rate": 0.7453,
+      "selected": 155,
+      "selected_pool_rate": 0.7742
+    },
+    {
+      "month": "202504",
+      "n": 229,
+      "baseline_pool_rate": 0.7773,
+      "selected": 181,
+      "selected_pool_rate": 0.7956
+    },
+    {
+      "month": "202505",
+      "n": 149,
+      "baseline_pool_rate": 0.7584,
+      "selected": 128,
+      "selected_pool_rate": 0.8047
+    },
+    {
+      "month": "202508",
+      "n": 173,
+      "baseline_pool_rate": 0.7746,
+      "selected": 150,
+      "selected_pool_rate": 0.78
+    },
+    {
+      "month": "202509",
+      "n": 198,
+      "baseline_pool_rate": 0.7626,
+      "selected": 162,
+      "selected_pool_rate": 0.7963
+    },
+    {
+      "month": "202510",
+      "n": 144,
+      "baseline_pool_rate": 0.75,
+      "selected": 113,
+      "selected_pool_rate": 0.7788
+    },
+    {
+      "month": "202511",
+      "n": 124,
+      "baseline_pool_rate": 0.7823,
+      "selected": 114,
+      "selected_pool_rate": 0.7982
+    },
+    {
+      "month": "202512",
+      "n": 5,
+      "baseline_pool_rate": 0.6,
+      "selected": 4,
+      "selected_pool_rate": 0.75
+    },
+    {
+      "month": "202601",
+      "n": 24,
+      "baseline_pool_rate": 0.7083,
+      "selected": 18,
+      "selected_pool_rate": 0.6667
+    },
+    {
+      "month": "202602",
+      "n": 22,
+      "baseline_pool_rate": 0.7727,
+      "selected": 22,
+      "selected_pool_rate": 0.7727
+    },
+    {
+      "month": "202603",
+      "n": 143,
+      "baseline_pool_rate": 0.7343,
+      "selected": 132,
+      "selected_pool_rate": 0.75
+    },
+    {
+      "month": "202604",
+      "n": 224,
+      "baseline_pool_rate": 0.7634,
+      "selected": 203,
+      "selected_pool_rate": 0.7833
+    },
+    {
+      "month": "202605",
+      "n": 528,
+      "baseline_pool_rate": 0.6989,
+      "selected": 466,
+      "selected_pool_rate": 0.7275
+    },
+    {
+      "month": "202606",
+      "n": 153,
+      "baseline_pool_rate": 0.732,
+      "selected": 140,
+      "selected_pool_rate": 0.7786
+    },
+    {
+      "month": "202607",
+      "n": 332,
+      "baseline_pool_rate": 0.7711,
+      "selected": 289,
+      "selected_pool_rate": 0.7716
+    },
+    {
+      "month": "202608",
+      "n": 968,
+      "baseline_pool_rate": 0.7211,
+      "selected": 878,
+      "selected_pool_rate": 0.7335
+    },
+    {
+      "month": "202609",
+      "n": 1017,
+      "baseline_pool_rate": 0.705,
+      "selected": 907,
+      "selected_pool_rate": 0.7155
+    },
+    {
+      "month": "202610",
+      "n": 985,
+      "baseline_pool_rate": 0.7218,
+      "selected": 840,
+      "selected_pool_rate": 0.7429
+    }
+  ]
+}

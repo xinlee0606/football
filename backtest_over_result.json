@@ -1,0 +1,228 @@
+{
+ "generated_at": "2026-10-31 23:29:35",
+ "train_ratio": 0.7,
+ "samples": 4919,
+ "baseline_pool_rate": 0.5176,
+ "sp_coverage": 0.9455,
+ "threshold_sensitivity": [
+  {
+   "threshold": 0.5,
+   "n": 3253,
+   "coverage": 0.6613,
+   "pool_hit_rate": 0.5453,
+   "top6_hit_rate": 0.5453,
+   "realized_profit_per_match": 0.796,
+   "model_ev_per_match": 3.102
+  },
+  {
+   "threshold": 0.55,
+   "n": 2491,
+   "coverage": 0.5064,
+   "pool_hit_rate": 0.5548,
+   "top6_hit_rate": 0.5548,
+   "realized_profit_per_match": 0.784,
+   "model_ev_per_match": 3.511
+  },
+  {
+   "threshold": 0.6,
+   "n": 1464,
+   "coverage": 0.2976,
+   "pool_hit_rate": 0.5635,
+   "top6_hit_rate": 0.5635,
+   "realized_profit_per_match": 0.74,
+   "model_ev_per_match": 3.937
+  },
+  {
+   "threshold": 0.65,
+   "n": 202,
+   "coverage": 0.0411,
+   "pool_hit_rate": 0.5495,
+   "top6_hit_rate": 0.5495,
+   "realized_profit_per_match": 1.497,
+   "model_ev_per_match": 6.439
+  },
+  {
+   "threshold": 0.7,
+   "n": 158,
+   "coverage": 0.0321,
+   "pool_hit_rate": 0.5633,
+   "top6_hit_rate": 0.5633,
+   "realized_profit_per_match": 1.867,
+   "model_ev_per_match": 5.924
+  },
+  {
+   "threshold": 0.75,
+   "n": 43,
+   "coverage": 0.0087,
+   "pool_hit_rate": 0.7442,
+   "top6_hit_rate": 0.7442,
+   "realized_profit_per_match": 9.626,
+   "model_ev_per_match": 5.054
+  },
+  {
+   "threshold": 0.8,
+   "n": 25,
+   "coverage": 0.0051,
+   "pool_hit_rate": 0.76,
+   "top6_hit_rate": 0.76,
+   "realized_profit_per_match": 3.886,
+   "model_ev_per_match": 2.436
+  }
+ ],
+ "monthly": [
+  {
+   "month": "202411",
+   "n": 12,
+   "baseline_pool_rate": 0.4167,
+   "selected": 1,
+   "selected_pool_rate": 1.0
+  },
+  {
+   "month": "202412",
+   "n": 11,
+   "baseline_pool_rate": 0.2727,
+   "selected": 5,
+   "selected_pool_rate": 0.6
+  },
+  {
+   "month": "202501",
+   "n": 5,
+   "baseline_pool_rate": 0.6,
+   "selected": 1,
+   "selected_pool_rate": 1.0
+  },
+  {
+   "month": "202502",
+   "n": 82,
+   "baseline_pool_rate": 0.5732,
+   "selected": 20,
+   "selected_pool_rate": 0.65
+  },
+  {
+   "month": "202503",
+   "n": 172,
+   "baseline_pool_rate": 0.4709,
+   "selected": 62,
+   "selected_pool_rate": 0.5645
+  },
+  {
+   "month": "202504",
+   "n": 162,
+   "baseline_pool_rate": 0.4938,
+   "selected": 73,
+   "selected_pool_rate": 0.4795
+  },
+  {
+   "month": "202505",
+   "n": 96,
+   "baseline_pool_rate": 0.5104,
+   "selected": 50,
+   "selected_pool_rate": 0.54
+  },
+  {
+   "month": "202508",
+   "n": 119,
+   "baseline_pool_rate": 0.5462,
+   "selected": 50,
+   "selected_pool_rate": 0.54
+  },
+  {
+   "month": "202509",
+   "n": 141,
+   "baseline_pool_rate": 0.5319,
+   "selected": 28,
+   "selected_pool_rate": 0.5357
+  },
+  {
+   "month": "202510",
+   "n": 113,
+   "baseline_pool_rate": 0.4602,
+   "selected": 50,
+   "selected_pool_rate": 0.54
+  },
+  {
+   "month": "202511",
+   "n": 94,
+   "baseline_pool_rate": 0.5426,
+   "selected": 27,
+   "selected_pool_rate": 0.5926
+  },
+  {
+   "month": "202512",
+   "n": 4,
+   "baseline_pool_rate": 0.25,
+   "selected": 2,
+   "selected_pool_rate": 0.5
+  },
+  {
+   "month": "202601",
+   "n": 19,
+   "baseline_pool_rate": 0.5789,
+   "selected": 3,
+   "selected_pool_rate": 0.3333
+  },
+  {
+   "month": "202602",
+   "n": 16,
+   "baseline_pool_rate": 0.5625,
+   "selected": 2,
+   "selected_pool_rate": 0.5
+  },
+  {
+   "month": "202603",
+   "n": 116,
+   "baseline_pool_rate": 0.5431,
+   "selected": 8,
+   "selected_pool_rate": 0.5
+  },
+  {
+   "month": "202604",
+   "n": 186,
+   "baseline_pool_rate": 0.4785,
+   "selected": 58,
+   "selected_pool_rate": 0.6724
+  },
+  {
+   "month": "202605",
+   "n": 263,
+   "baseline_pool_rate": 0.5209,
+   "selected": 100,
+   "selected_pool_rate": 0.62
+  },
+  {
+   "month": "202606",
+   "n": 150,
+   "baseline_pool_rate": 0.52,
+   "selected": 76,
+   "selected_pool_rate": 0.5395
+  },
+  {
+   "month": "202607",
+   "n": 294,
+   "baseline_pool_rate": 0.5068,
+   "selected": 158,
+   "selected_pool_rate": 0.5696
+  },
+  {
+   "month": "202608",
+   "n": 895,
+   "baseline_pool_rate": 0.5061,
+   "selected": 406,
+   "selected_pool_rate": 0.5123
+  },
+  {
+   "month": "202609",
+   "n": 987,
+   "baseline_pool_rate": 0.5502,
+   "selected": 250,
+   "selected_pool_rate": 0.616
+  },
+  {
+   "month": "202610",
+   "n": 982,
+   "baseline_pool_rate": 0.5112,
+   "selected": 34,
+   "selected_pool_rate": 0.7059
+  }
+ ]
+}
