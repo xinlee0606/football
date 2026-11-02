@@ -1,0 +1,19 @@
+# Cache files
+features_over_cache.csv
+features_under_cache.csv
+features_cache.csv
+*.csv
+# Logs
+*.log
+ml_predictions.jsonl
+# Node
+node_modules/
+# IDE
+.idea/
+.vscode/
+# Python
+__pycache__/
+*.pyc
+.venv/
+# Backup
+*.bak*
