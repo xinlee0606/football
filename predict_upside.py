@@ -406,6 +406,13 @@ def backfill(target_date, min_prob=None):
     medians = meta.get('medians', {})
     if medians:
         fill_medians = {k: v for k, v in medians.items() if k in sub.columns}
+        # 添加缺失指示器(为所有特征列创建,与训练一致)
+        indicator_cols = []
+        for col in available_feats:
+            indicator_name = f'{col}_missing'
+            sub[indicator_name] = sub[col].isnull().astype(int)
+            indicator_cols.append(indicator_name)
+        available_feats = available_feats + indicator_cols
         sub[available_feats] = sub[available_feats].fillna(fill_medians)
     sub['p_upside'] = model.predict_proba(sub[available_feats])[:, 1]
     sub = attach_pool_probs(sub, available_feats, pool_clf, calib, alpha, gh, ga, rho, medians)
@@ -465,6 +472,13 @@ def attach_pool_probs(df, feats, pool_clf, calib, alpha, gh, ga, rho, medians=No
     # 新增：使用中位数填充缺失值
     if medians:
         fill_medians = {k: v for k, v in medians.items() if k in X.columns}
+        # 添加缺失指示器(为所有特征列创建,与训练一致)
+        indicator_cols = []
+        for col in available_feats:
+            indicator_name = f'{col}_missing'
+            X[indicator_name] = X[col].isnull().astype(int)
+            indicator_cols.append(indicator_name)
+        available_feats = available_feats + indicator_cols
         X = X.fillna(fill_medians)
     if gh is None or ga is None or rho is None:
         d['p_underool'] = 0.0
@@ -612,6 +626,13 @@ def main():
     medians = meta.get('medians', {})
     if medians:
         fill_medians = {k: v for k, v in medians.items() if k in unfinished.columns}
+        # 添加缺失指示器
+        indicator_cols = []
+        for col in available_feats:
+            indicator_name = f'{col}_missing'
+            unfinished[indicator_name] = unfinished[col].isnull().astype(int)
+            indicator_cols.append(indicator_name)
+        available_feats = available_feats + indicator_cols
         unfinished[available_feats] = unfinished[available_feats].fillna(fill_medians)
     unfinished['p_upside'] = model.predict_proba(unfinished[available_feats])[:, 1]
 

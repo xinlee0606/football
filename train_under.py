@@ -41,6 +41,22 @@ from features_under import (META_COLS_UNDER, UNDER, UNDER_SET, TARGET_HANDICAPS_
 
 MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models')
 
+
+def _add_missing_indicators(df, feats):
+    """为所有特征列添加缺失指示器(1=缺失, 0=非缺失)"""
+    indicator_cols = []
+    for col in feats:
+        if col not in df.columns:
+            continue
+        indicator_name = f'{col}_missing'
+        df[indicator_name] = df[col].isnull().astype(int)
+        indicator_cols.append(indicator_name)
+    new_feats = feats + indicator_cols
+    n_with_missing = sum(1 for c in indicator_cols if df[c].sum() > 0)
+    print(f"  添加缺失指示器: {len(indicator_cols)}个, 其中{n_with_missing}个有缺失")
+    return df, new_feats
+
+
 # ==================== 训练超参 ====================
 TRAIN_RATIO = 0.70          # 训练集占比(按时间顺序)
 VALID_RATIO = 0.15          # 留出集占比(选α/rho/阈值/早停)
@@ -172,6 +188,11 @@ def prepare_data(df, end_date=None, handicap_filter=True):
         before = len(d)
         d = d[mask_no_cup]
         print(f"排除杯赛: {before} -> {len(d)}场")
+        # 4. 过滤交锋场次<3的比赛
+        if 'h2h_n' in d.columns:
+            before = len(d)
+            d = d[d['h2h_n'].fillna(0) >= 3]
+            print(f"交锋场次筛选(>=3场): {before} -> {len(d)}场")
         # 3. 大小球线上限过滤 (排除进球大战死区，终盘 > MAX_OU_LINE_UNDER)
         mask_ou = d.apply(lambda r: is_valid_ou_line_under(
             r.get('ou_line_cur_mean'), r.get('ou_line_init_mean')), axis=1)
@@ -201,6 +222,10 @@ def train_over(df_train, df_valid, feats, verbose=True):
     leak = {'y', 'home_goals', 'away_goals', 'in_pool', 'score', 'sp'} & set(feats)
     if leak:
         raise ValueError(f"特征列表混入了标签/辅助列, 拒绝训练: {sorted(leak)}")
+    
+    # 添加缺失指示器
+    df_train, feats = _add_missing_indicators(df_train, feats)
+    df_valid, _ = _add_missing_indicators(df_valid, feats)
     
     # 新增：在训练集上计算中位数，用于填充缺失值
     medians = df_train[feats].median().to_dict()
@@ -350,6 +375,18 @@ def predict_rows(model, df):
         medians = model['medians']
         # 只填充模型实际使用的特征
         fill_medians = {k: v for k, v in medians.items() if k in X.columns}
+        # 添加缺失指示器(只为原始特征创建,不为指示器本身创建)
+        indicator_cols = []
+        for col in feats:
+            if col.endswith('_missing'):  # 跳过已有的指示器列
+                continue
+            if col not in X.columns:
+                continue
+            indicator_name = f'{col}_missing'
+            X[indicator_name] = X[col].isnull().astype(int)
+            indicator_cols.append(indicator_name)
+        # 更新feats以包含指示器列
+        feats = [f for f in feats if f in X.columns] + indicator_cols
         X = X.fillna(fill_medians)
     d['p_lgb'] = _proba_pool(model['clf'], X)
     d['lambda_home'] = np.clip(model['goals']['home'].predict(X), 0.1, 4.5)

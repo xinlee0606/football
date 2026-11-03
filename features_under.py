@@ -19,6 +19,7 @@ from collections import Counter, defaultdict
 from multiprocessing import Pool, cpu_count
 
 import pandas as pd
+import numpy as np
 
 from config import DB_CONFIG
 
@@ -39,6 +40,10 @@ PREDICT_HANDICAP_NUMS_UNDER = {0.0, -0.25, 0.25}
 # 全库分档显示 UNDER 池内命中率随大小球线单调下降, OU>3.25 档 ROI 崩至~0(低分池难命中),
 # 故训练/回测/预测统一过滤掉终盘大小球线 > 3.25 的比赛; 数据缺失则不误杀(保留)。
 MAX_OU_LINE_UNDER = 3.25
+
+
+# Time decay parameter for recent form weighting
+TIME_DECAY_LAMBDA = 0.08  # Exponential decay rate: w_i = exp(-lambda * (n-1-i))
 
 
 def is_target_handicap_under(ah_cur_mean, ah_init_mean=None):
@@ -218,7 +223,7 @@ def asian_features_upside(rows):
     返回特征dict; 无数据返回全NaN dict"""
     keys = ['asian_n', 'ah_init_mean', 'ah_init_std', 'ah_init_flat_share',
             'ah_cur_mean', 'ah_cur_std', 'ah_cur_flat_share', 'ah_move',
-            'ah_move_up_share', 'cover_prob_init', 'cover_prob_cur',
+            'ah_move_up_share', 'cover_prob_init',
             'aw_init_diff', 'aw_cur_diff', 'aw_drift']
     feats = {k: None for k in keys}
 
@@ -263,8 +268,6 @@ def asian_features_upside(rows):
     # 让球覆盖隐含概率: P(主队赢盘) = 客水/(主水+客水) (去水归一)
     if ho_i and ao_i:
         feats['cover_prob_init'] = _mean([a / (h + a) for h, a in zip(ho_i, ao_i)])
-    if ho_c and ao_c:
-        feats['cover_prob_cur'] = _mean([a / (h + a) for h, a in zip(ho_c, ao_c)])
     if ho_i and ao_i:
         feats['aw_init_diff'] = _mean(ho_i) - _mean(ao_i)
     if ho_c and ao_c:
@@ -280,7 +283,7 @@ def asian_features_upside(rows):
 def over_under_features_upside(rows):
     """rows: 该场比赛over_under_odds表全部行(dict列表)"""
     keys = ['ou_n', 'ou_line_init_mean', 'ou_line_init_std', 'ou_line_cur_mean',
-            'ou_line_move', 'over_prob_init', 'over_prob_cur', 'exp_total']
+            'ou_line_move', 'over_prob_init', 'over_prob_cur']
     feats = {k: None for k in keys}
 
     li, lc, lo_i, uo_i, lo_c, uo_c = [], [], [], [], [], []
@@ -315,8 +318,6 @@ def over_under_features_upside(rows):
         feats['over_prob_init'] = _mean([u / (o + u) for o, u in zip(lo_i, uo_i)])
     if lo_c and uo_c:
         feats['over_prob_cur'] = _mean([u / (o + u) for o, u in zip(lo_c, uo_c)])
-    feats['exp_total'] = feats['ou_line_cur_mean'] if feats['ou_line_cur_mean'] is not None \
-        else feats['ou_line_init_mean']
     return feats
 
 
@@ -501,12 +502,14 @@ def _h2h_features_upside_fast(home_team, away_team, h2h_data, max_h2h=10):
     return feats
 
 
-def _recent_form_features_upside_fast(team_name, team_data, is_home=True):
+def _recent_form_features_upside_fast(team_name, team_data, is_home=True, league_avgs=None):
     """快速版近期战绩特征(使用预加载数据)"""
-    keys = ['recent_n', 'recent_win_rate', 'recent_draw_rate', 'recent_loss_rate',
+    keys = ['recent_n', 'recent_win_rate', 'recent_draw_rate',
             'recent_goals_for_mean', 'recent_goals_against_mean',
             'recent_clean_sheet_rate', 'recent_btts_rate',
-            'recent_over_25_rate', 'recent_unbeaten_rate']
+            'recent_over_25_rate', 'recent_unbeaten_rate',
+            'rf_shots_mean', 'rf_sot_mean', 'rf_corners_mean',
+            'rf_danger_mean', 'rf_poss_mean', 'rf_fouls_mean', 'rf_yellow_mean']
     feats = {k: None for k in keys}
     
     n = len(team_data)
@@ -548,7 +551,6 @@ def _recent_form_features_upside_fast(team_name, team_data, is_home=True):
         feats['recent_n'] = n
         feats['recent_win_rate'] = wins / n
         feats['recent_draw_rate'] = draws / n
-        feats['recent_loss_rate'] = losses / n
         feats['recent_goals_for_mean'] = _mean(goals_for)
         feats['recent_goals_against_mean'] = _mean(goals_against)
         feats['recent_clean_sheet_rate'] = clean_sheets / n
@@ -556,6 +558,26 @@ def _recent_form_features_upside_fast(team_name, team_data, is_home=True):
         feats['recent_over_25_rate'] = over_25_count / n
         feats['recent_unbeaten_rate'] = (wins + draws) / n
     
+
+    # 7项技术指标(联赛均值填充缺失值)
+    if league_avgs is None:
+        league_avgs = {}
+    shots_list = [m.get('shots') for m in team_data if m.get('shots') is not None]
+    sot_list = [m.get('shots_on_target') for m in team_data if m.get('shots_on_target') is not None]
+    corners_list = [m.get('corners') for m in team_data if m.get('corners') is not None]
+    danger_list = [m.get('dangerous_attacks') for m in team_data if m.get('dangerous_attacks') is not None]
+    poss_list = [to_float(m.get('possession')) for m in team_data if to_float(m.get('possession')) is not None]
+    fouls_list = [m.get('fouls') for m in team_data if m.get('fouls') is not None]
+    yellow_list = [m.get('yellow_cards') for m in team_data if m.get('yellow_cards') is not None]
+
+    feats['rf_shots_mean'] = _mean(shots_list) if shots_list else league_avgs.get('shots')
+    feats['rf_sot_mean'] = _mean(sot_list) if sot_list else league_avgs.get('shots_on_target')
+    feats['rf_corners_mean'] = _mean(corners_list) if corners_list else league_avgs.get('corners')
+    feats['rf_danger_mean'] = _mean(danger_list) if danger_list else league_avgs.get('dangerous_attacks')
+    feats['rf_poss_mean'] = _mean(poss_list) if poss_list else league_avgs.get('possession')
+    feats['rf_fouls_mean'] = _mean(fouls_list) if fouls_list else league_avgs.get('fouls')
+    feats['rf_yellow_mean'] = _mean(yellow_list) if yellow_list else league_avgs.get('yellow_cards')
+
     return feats
 
 
@@ -563,7 +585,7 @@ def _league_stats_features_upside_fast(league, league_data):
     """快速版联赛统计特征(使用预加载数据)"""
     keys = ['league_n', 'league_home_win_rate', 'league_draw_rate', 'league_away_win_rate',
             'league_avg_goals', 'league_btts_rate', 'league_over_25_rate',
-            'league_home_unbeaten_rate']
+            'league_home_unbeaten_rate', 'league_goal_strength']
     feats = {k: None for k in keys}
     
     n = len(league_data)
@@ -701,7 +723,7 @@ def recent_form_features_upside(team_name, history_df, is_home=True, max_recent=
     is_home: 是否为主场视角
     max_recent: 最多取最近N场
     返回特征dict"""
-    keys = ['recent_n', 'recent_win_rate', 'recent_draw_rate', 'recent_loss_rate',
+    keys = ['recent_n', 'recent_win_rate', 'recent_draw_rate',
             'recent_goals_for_mean', 'recent_goals_against_mean',
             'recent_clean_sheet_rate', 'recent_btts_rate',
             'recent_over_25_rate', 'recent_unbeaten_rate']
@@ -755,7 +777,6 @@ def recent_form_features_upside(team_name, history_df, is_home=True, max_recent=
         feats['recent_n'] = n
         feats['recent_win_rate'] = wins / n
         feats['recent_draw_rate'] = draws / n
-        feats['recent_loss_rate'] = losses / n
         feats['recent_goals_for_mean'] = _mean(goals_for)
         feats['recent_goals_against_mean'] = _mean(goals_against)
         feats['recent_clean_sheet_rate'] = clean_sheets / n
@@ -774,7 +795,7 @@ def league_stats_features_upside(league, history_df):
     返回特征dict"""
     keys = ['league_n', 'league_home_win_rate', 'league_draw_rate', 'league_away_win_rate',
             'league_avg_goals', 'league_btts_rate', 'league_over_25_rate',
-            'league_home_unbeaten_rate']
+            'league_home_unbeaten_rate', 'league_goal_strength']
     feats = {k: None for k in keys}
 
     league_rows = history_df[history_df['league'] == league]
@@ -814,6 +835,10 @@ def league_stats_features_upside(league, history_df):
         feats['league_btts_rate'] = btts_count / n
         feats['league_over_25_rate'] = over_25_count / n
         feats['league_home_unbeaten_rate'] = home_unbeaten / n
+        # League goal strength: how many goals per game vs baseline (2.7)
+        league_avg = _mean(goals_list)
+        if league_avg is not None:
+            feats['league_goal_strength'] = league_avg / 2.7  # baseline ~2.7 goals/game
 
     return feats
 
@@ -850,8 +875,62 @@ def _compute_single_match_features(args):
     league_data = league_matches.get(league, [])
     league_stats = _league_stats_features_upside_fast(league, league_data)
 
+    # Add h_/a_ prefixes to recent form features
+    home_recent_prefixed = {f'h_{k}': v for k, v in home_recent.items()}
+    away_recent_prefixed = {f'a_{k}': v for k, v in away_recent.items()}
+    
+    # Compute combination features (home - away differences)
+    combo = {}
+    # 进攻效率差 (shooting accuracy: shots on target / total shots)
+    h_sot = home_recent.get('rf_sot_mean')
+    h_shots = home_recent.get('rf_shots_mean')
+    a_sot = away_recent.get('rf_sot_mean')
+    a_shots = away_recent.get('rf_shots_mean')
+    if h_sot is not None and h_shots and h_shots > 0:
+        h_eff = h_sot / h_shots
+    else:
+        h_eff = None
+    if a_sot is not None and a_shots and a_shots > 0:
+        a_eff = a_sot / a_shots
+    else:
+        a_eff = None
+    if h_eff is not None and a_eff is not None:
+        combo['attack_eff_diff'] = h_eff - a_eff
+    
+    # 控球优势 (possession advantage)
+    h_poss = home_recent.get('rf_poss_mean')
+    a_poss = away_recent.get('rf_poss_mean')
+    if h_poss is not None and a_poss is not None:
+        combo['possession_diff'] = h_poss - a_poss
+    
+    # 角球优势 (corner advantage)
+    h_corners = home_recent.get('rf_corners_mean')
+    a_corners = away_recent.get('rf_corners_mean')
+    if h_corners is not None and a_corners is not None:
+        combo['corners_diff'] = h_corners - a_corners
+    
+    # 纪律性差异 (discipline: fouls + yellow cards difference)
+    h_fouls = home_recent.get('rf_fouls_mean')
+    a_fouls = away_recent.get('rf_fouls_mean')
+    h_yellow = home_recent.get('rf_yellow_mean')
+    a_yellow = away_recent.get('rf_yellow_mean')
+    if h_fouls is not None and a_fouls is not None:
+        combo['fouls_diff'] = h_fouls - a_fouls
+    if h_yellow is not None and a_yellow is not None:
+        combo['yellow_diff'] = h_yellow - a_yellow
+    
+    # 状态动量 (form momentum: recent win rate vs league baseline)
+    h_win_rate = home_recent.get('recent_win_rate')
+    a_win_rate = away_recent.get('recent_win_rate')
+    league_h_wr = league_stats.get('league_home_win_rate')
+    league_a_wr = league_stats.get('league_away_win_rate')
+    if h_win_rate is not None and league_h_wr is not None:
+        combo['form_momentum_h'] = h_win_rate - league_h_wr
+    if a_win_rate is not None and league_a_wr is not None:
+        combo['form_momentum_a'] = a_win_rate - league_a_wr
+    
     # Merge all features
-    feat_row = {**af, **ouf, **ef, **h2hf, **home_recent, **away_recent, **league_stats}
+    feat_row = {**af, **ouf, **ef, **h2hf, **home_recent_prefixed, **away_recent_prefixed, **league_stats, **combo}
     meta_row = row
     return {**meta_row, **feat_row}
 
@@ -961,8 +1040,35 @@ def build_features_under(conn):
     """)
     hist_matches = cursor.fetchall()
     history_df = pd.DataFrame(hist_matches, columns=['match_id', 'league', 'home_team', 'away_team', 'score'])
-
-    # 6b. 加载历史交锋数据(含半场比分、角球)
+    
+    # 6a. 加载recent_form技术指标(用于7项技术统计特征)
+    cursor.execute("""
+        SELECT match_id, shots, shots_on_target, corners, dangerous_attacks,
+               possession, fouls, yellow_cards
+        FROM recent_form
+        WHERE is_current_match = 0
+        ORDER BY match_id
+    """)
+    recent_tech_map = {row[0]: {'shots': row[1], 'shots_on_target': row[2], 
+                                 'corners': row[3], 'dangerous_attacks': row[4],
+                                 'possession': row[5], 'fouls': row[6], 
+                                 'yellow_cards': row[7]} 
+                       for row in cursor.fetchall()}
+    
+    # 6b. 计算联赛技术指标均值(用于缺失值填充)
+    cursor.execute("""
+        SELECT league, AVG(shots), AVG(corners), AVG(dangerous_attacks), 
+               AVG(fouls), AVG(yellow_cards), AVG(possession)
+        FROM recent_form
+        WHERE is_current_match = 0 AND shots IS NOT NULL
+        GROUP BY league
+    """)
+    league_tech_avgs = {row[0]: {'shots': row[1], 'corners': row[2], 
+                                   'dangerous_attacks': row[3], 'fouls': row[4],
+                                   'yellow_cards': row[5], 'possession': row[6]}
+                        for row in cursor.fetchall()}
+    
+    # 6c. 加载历史交锋数据(含半场比分、角球)
     cursor.execute("""
         SELECT home_team, away_team, score, half_score, corners
         FROM head_to_head
@@ -985,11 +1091,21 @@ def build_features_under(conn):
         home = row['home_team']
         away = row['away_team']
         league = row['league']
+        mid = row['match_id']
+        tech = recent_tech_map.get(mid, {})
         match_data = {
-            'match_id': row['match_id'],
+            'match_id': mid,
             'score': row['score'],
             'home_team': home,
-            'away_team': away
+            'away_team': away,
+            'league': row['league'],
+            'shots': tech.get('shots'),
+            'shots_on_target': tech.get('shots_on_target'),
+            'corners': tech.get('corners'),
+            'dangerous_attacks': tech.get('dangerous_attacks'),
+            'possession': tech.get('possession'),
+            'fouls': tech.get('fouls'),
+            'yellow_cards': tech.get('yellow_cards')
         }
         home_team_matches[home].append(match_data)
         away_team_matches[away].append(match_data)
@@ -1040,8 +1156,53 @@ def build_features_under(conn):
         league_data = league_matches.get(league, [])
         league_stats = _league_stats_features_upside_fast(league, league_data)
 
+        # Add h_/a_ prefixes to recent form features
+        home_recent_prefixed = {f'h_{k}': v for k, v in home_recent.items()}
+        away_recent_prefixed = {f'a_{k}': v for k, v in away_recent.items()}
+        
+        # Compute combination features
+        combo = {}
+        h_sot = home_recent.get('rf_sot_mean')
+        h_shots = home_recent.get('rf_shots_mean')
+        a_sot = away_recent.get('rf_sot_mean')
+        a_shots = away_recent.get('rf_shots_mean')
+        if h_sot is not None and h_shots and h_shots > 0:
+            h_eff = h_sot / h_shots
+        else:
+            h_eff = None
+        if a_sot is not None and a_shots and a_shots > 0:
+            a_eff = a_sot / a_shots
+        else:
+            a_eff = None
+        if h_eff is not None and a_eff is not None:
+            combo['attack_eff_diff'] = h_eff - a_eff
+        h_poss = home_recent.get('rf_poss_mean')
+        a_poss = away_recent.get('rf_poss_mean')
+        if h_poss is not None and a_poss is not None:
+            combo['possession_diff'] = h_poss - a_poss
+        h_corners = home_recent.get('rf_corners_mean')
+        a_corners = away_recent.get('rf_corners_mean')
+        if h_corners is not None and a_corners is not None:
+            combo['corners_diff'] = h_corners - a_corners
+        h_fouls = home_recent.get('rf_fouls_mean')
+        a_fouls = away_recent.get('rf_fouls_mean')
+        h_yellow = home_recent.get('rf_yellow_mean')
+        a_yellow = away_recent.get('rf_yellow_mean')
+        if h_fouls is not None and a_fouls is not None:
+            combo['fouls_diff'] = h_fouls - a_fouls
+        if h_yellow is not None and a_yellow is not None:
+            combo['yellow_diff'] = h_yellow - a_yellow
+        h_win_rate = home_recent.get('recent_win_rate')
+        a_win_rate = away_recent.get('recent_win_rate')
+        league_h_wr = league_stats.get('league_home_win_rate')
+        league_a_wr = league_stats.get('league_away_win_rate')
+        if h_win_rate is not None and league_h_wr is not None:
+            combo['form_momentum_h'] = h_win_rate - league_h_wr
+        if a_win_rate is not None and league_a_wr is not None:
+            combo['form_momentum_a'] = a_win_rate - league_a_wr
+        
         # 合并所有特征
-        feat_row = {**af, **ouf, **ef, **h2hf, **home_recent, **away_recent, **league_stats}
+        feat_row = {**af, **ouf, **ef, **h2hf, **home_recent_prefixed, **away_recent_prefixed, **league_stats, **combo}
         meta_row = row.to_dict()
         all_rows.append({**meta_row, **feat_row})
 
@@ -1051,20 +1212,6 @@ def build_features_under(conn):
 
     result_df = pd.DataFrame(all_rows)
     print(f"✓ 特征构建完成：{len(result_df)}场")
-    
-    # 新增：添加覆盖率权重特征（让模型知晓数据可信度）
-    print("⏳ 添加覆盖率权重特征...")
-    coverage_cols = ['ah_cur_mean', 'ah_init_mean', 'ou_line_cur_mean', 'ou_line_init_mean',
-                     'euro_win_cur', 'euro_draw_cur', 'euro_loss_cur',
-                     'h2h_n', 'h2h_corners_avg', 'h2h_half_goal_avg']
-    for col in coverage_cols:
-        # 总是添加 _confidence 列，即使原列不存在（此时全为 0）
-        if col in result_df.columns:
-            result_df[f'{col}_confidence'] = result_df[col].notna().astype(float)
-        else:
-            result_df[f'{col}_confidence'] = 0.0
-    print(f"✓ 已添加 {len(coverage_cols)} 个覆盖率权重特征")
-    
     return result_df
 
 
@@ -1077,20 +1224,23 @@ def feature_columns_under():
     # 构造空DataFrame但包含必要的列，避免KeyError
     empty_hist_df = pd.DataFrame(columns=['match_id', 'home_team', 'away_team', 'score', 'league'])
     sample_h2h = h2h_features_upside('', '', empty_hist_df)
-    sample_recent = recent_form_features_upside('', empty_hist_df, is_home=True)
-    sample_league = league_stats_features_upside('', empty_hist_df)
+    sample_recent = _recent_form_features_upside_fast('', [], is_home=True)
+    sample_league = _league_stats_features_upside_fast('', [])
 
-    all_keys = list(sample_asian.keys()) + list(sample_ou.keys()) + list(sample_euro.keys()) + \
-               list(sample_h2h.keys()) + \
-               list(sample_recent.keys()) + list(sample_league.keys())
+    # 基础特征(盘口+交锋+联赛)
+    base_keys = list(sample_asian.keys()) + list(sample_ou.keys()) + list(sample_euro.keys()) + \
+                list(sample_h2h.keys()) + list(sample_league.keys())
     
-    # 新增：添加覆盖率权重特征列名
-    coverage_cols = ['ah_cur_mean', 'ah_init_mean', 'ou_line_cur_mean', 'ou_line_init_mean',
-                     'euro_win_cur', 'euro_draw_cur', 'euro_loss_cur',
-                     'h2h_n', 'h2h_corners_avg', 'h2h_half_goal_avg']
-    coverage_confidence_cols = [f'{col}_confidence' for col in coverage_cols]
-    all_keys.extend(coverage_confidence_cols)
+    # 近期战绩特征(添加h_/a_前缀区分主客场)
+    recent_keys = list(sample_recent.keys())
+    h_recent_keys = [f'h_{k}' for k in recent_keys]
+    a_recent_keys = [f'a_{k}' for k in recent_keys]
     
+    # 组合特征
+    combo_keys = ['attack_eff_diff', 'possession_diff', 'corners_diff', 
+                  'fouls_diff', 'yellow_diff', 'form_momentum_h', 'form_momentum_a']
+    
+    all_keys = base_keys + h_recent_keys + a_recent_keys + combo_keys
     return all_keys
 
 

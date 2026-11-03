@@ -425,8 +425,11 @@ def _recent_team_features(rows, team_name):
                      'rf_whome_ppg', 'rf_waway_ppg']
     # 连续主客场
     streak_keys = ['rf_consec_home', 'rf_consec_away']
+    # 7项技术指标
+    tech_keys = ['rf_shots_mean', 'rf_sot_mean', 'rf_corners_mean',
+                 'rf_danger_mean', 'rf_poss_mean', 'rf_fouls_mean', 'rf_yellow_mean']
     
-    all_keys = prefix_keys + split_keys + weighted_keys + streak_keys
+    all_keys = prefix_keys + split_keys + weighted_keys + streak_keys + tech_keys
     feats = {k: None for k in all_keys}
 
     # 解析所有比赛（去重 + 过滤无效比分）
@@ -556,6 +559,36 @@ def _recent_team_features(rows, team_name):
             break
     feats['rf_consec_away'] = consec_away
 
+    # ---- 4. 7项技术指标特征(联赛均值填充缺失值) ----
+    # 从rows中提取技术指标
+    shots_list, corners_list, danger_list = [], [], []
+    fouls_list, yellow_list = [], []
+    for u in use:
+        row = u['row']
+        if row.get('shots') is not None:
+            shots_list.append(float(row['shots']))
+        if row.get('corners') is not None:
+            corners_list.append(float(row['corners']))
+        if row.get('dangerous_attacks') is not None:
+            danger_list.append(float(row['dangerous_attacks']))
+        if row.get('fouls') is not None:
+            fouls_list.append(float(row['fouls']))
+        if row.get('yellow_cards') is not None:
+            yellow_list.append(float(row['yellow_cards']))
+    
+    # 联赛均值从全局变量获取(在build_features中计算)
+    league_avgs = globals().get('_league_tech_avgs', {})
+    
+    # 计算均值,缺失时用联赛均值填充
+    feats['rf_shots_mean'] = _mean(shots_list) if shots_list else league_avgs.get('shots')
+    feats['rf_sot_mean'] = feats.get('rf_sot_rate')  # 已有射正率
+    feats['rf_corners_mean'] = _mean(corners_list) if corners_list else league_avgs.get('corners')
+    feats['rf_danger_mean'] = _mean(danger_list) if danger_list else league_avgs.get('dangerous_attacks')
+    feats['rf_fouls_mean'] = _mean(fouls_list) if fouls_list else league_avgs.get('fouls')
+    feats['rf_yellow_mean'] = _mean(yellow_list) if yellow_list else league_avgs.get('yellow_cards')
+    # 控球率已有
+    feats['rf_poss_mean'] = feats.get('rf_poss')
+
     return feats
 
 
@@ -667,19 +700,22 @@ def load_raw(cursor):
     cursor.execute("""
         SELECT match_id, team_type, team_name, home_team, away_team, score,
                handicap_result, over_under_result, shots, shots_on_target, possession,
+               corners, dangerous_attacks, fouls, yellow_cards,
                match_date
         FROM recent_form
         WHERE is_current_match = 0
         ORDER BY match_id, match_date DESC
     """)
     recent = defaultdict(lambda: {'home': [], 'away': []})
-    for mid, tt, tname, ht, at, sc, hcr, our, shots, sot, poss, mdate in cursor.fetchall():
+    for mid, tt, tname, ht, at, sc, hcr, our, shots, sot, poss, corners, danger, fouls, yellow, mdate in cursor.fetchall():
         if tt in ('home', 'away'):
             recent[mid][tt].append({'team_name': tname, 'home_team': ht,
                                     'away_team': at, 'score': sc,
                                     'handicap_result': hcr, 'over_under_result': our,
                                     'shots': shots, 'shots_on_target': sot,
-                                    'possession': poss, 'match_date': mdate})
+                                    'possession': poss, 'corners': corners,
+                                    'dangerous_attacks': danger, 'fouls': fouls,
+                                    'yellow_cards': yellow, 'match_date': mdate})
     data['recent'] = recent
 
     cursor.execute("""
@@ -735,6 +771,25 @@ def build_features(conn_or_cursor):
     if hasattr(conn_or_cursor, 'cursor'):
         cursor = conn_or_cursor.cursor()
         own_cursor = True
+    
+    # 计算联赛技术指标均值(用于缺失值填充)
+    cursor.execute("""
+        SELECT league, 
+               AVG(shots) as avg_shots, AVG(corners) as avg_corners,
+               AVG(dangerous_attacks) as avg_danger, AVG(fouls) as avg_fouls,
+               AVG(yellow_cards) as avg_yellow
+        FROM recent_form
+        WHERE is_current_match = 0 AND shots IS NOT NULL
+        GROUP BY league
+    """)
+    global _league_tech_avgs
+    _league_tech_avgs = {}
+    for league, avg_s, avg_c, avg_d, avg_f, avg_y in cursor.fetchall():
+        _league_tech_avgs[league] = {
+            'shots': avg_s, 'corners': avg_c, 'dangerous_attacks': avg_d,
+            'fouls': avg_f, 'yellow_cards': avg_y
+        }
+    
     try:
         raw = load_raw(cursor)
     finally:
