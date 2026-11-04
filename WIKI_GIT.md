@@ -101,6 +101,351 @@ git merge feature-xxx         # 合并分支到当前分支
 
 ---
 
+## 完整推送流程（Gitee）
+
+### 步骤 1：查看远程仓库配置
+
+```bash
+cd D:\Coding\QiuSport\live
+git remote -v
+```
+
+**预期输出**：
+```
+gitee   https://xinlee0606:***@gitee.com/xinlee0606/football.git (fetch)
+gitee   https://xinlee0606:***@gitee.com/xinlee0606/football.git (push)
+origin  https://github.com/xinlee0606/football.git (fetch)
+origin  https://github.com/xinlee0606/football.git (push)
+```
+
+**说明**：
+- `gitee` = Gitee 远程仓库（主仓库，国内速度快）
+- `origin` = GitHub 远程仓库（备用，用于备份）
+
+---
+
+### 步骤 2：查看当前分支状态
+
+```bash
+git branch -vv
+```
+
+**预期输出**：
+```
+* main afe8712 [gitee/main] WIKI_GIT.md: 更新为 Gitee 优先的 Git 使用指南
+```
+
+**说明**：
+- `*` 表示当前所在分支
+- `[gitee/main]` 表示本地 `main` 分支跟踪的是 `gitee` 远程的 `main` 分支
+
+---
+
+### 步骤 3：查看工作区状态
+
+```bash
+git status
+```
+
+**预期输出示例**：
+```
+On branch main
+Your branch is up to date with 'gitee/main'.
+
+Changes not staged for commit:
+  modified:   features_under.py
+  modified:   train_under.py
+
+no changes added to commit
+```
+
+**说明**：
+- 如果有修改的文件，会显示在 "Changes not staged for commit" 下
+- 如果有未跟踪的新文件，会显示在 "Untracked files" 下
+
+---
+
+### 步骤 4：查看具体变更内容（可选）
+
+```bash
+git diff                      # 查看所有未暂存的修改
+git diff features_under.py    # 查看指定文件的修改
+```
+
+---
+
+### 步骤 5：添加文件到暂存区
+
+```bash
+# 添加所有修改的文件
+git add .
+
+# 或添加指定文件
+git add features_under.py train_under.py
+
+# 查看已暂存的文件
+git status
+```
+
+**预期输出**：
+```
+Changes to be committed:
+  modified:   features_under.py
+  modified:   train_under.py
+```
+
+---
+
+### 步骤 6：提交代码
+
+```bash
+git commit -m "feat: 优化 UNDER 模型大小球上限配置
+
+- MAX_OU_LINE_UNDER 从 3.25 降至 2.75
+- 优化覆盖率权重特征添加逻辑，避免 DataFrame 碎片化
+- 更新 WIKI_UNDER.md 文档"
+```
+
+**提交信息规范**：
+- `feat:` 新功能
+- `fix:` 修复 bug
+- `docs:` 文档更新
+- `refactor:` 代码重构
+- `perf:` 性能优化
+- `test:` 测试相关
+
+---
+
+### 步骤 7：推送到 Gitee
+
+```bash
+# 推送到 Gitee 的 main 分支
+git push gitee main
+```
+
+**预期输出**：
+```
+Enumerating objects: 15, done.
+Counting objects: 100% (15/15), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (8/8), done.
+Writing objects: 100% (8/8), 1.2 KiB | 1.2 MiB/s, done.
+Total 8 (delta 6), reused 0 (delta 0), pack-reused 0
+remote: Powered by GITEE.COM [1.1.23]
+remote: Set trace flag a1b2c3d4
+To https://gitee.com/xinlee0606/football.git
+   afe8712..b5c6d7e  main -> main
+```
+
+**说明**：
+- 最后一行显示推送成功：`afe8712..b5c6d7e  main -> main`
+- 如果显示 `Everything up-to-date`，表示远程已经是最新状态，无需推送
+
+---
+
+### 步骤 8：验证推送结果
+
+```bash
+# 查看远程分支列表
+git branch -r
+
+# 查看最近提交记录
+git log --oneline -5
+
+# 查看远程仓库最新提交
+git log gitee/main --oneline -5
+```
+
+**预期输出**：
+```
+gitee/main
+gitee/feature-tech
+origin/main
+
+b5c6d7e (HEAD -> main, gitee/main) feat: 优化 UNDER 模型大小球上限配置
+afe8712 WIKI_GIT.md: 更新为 Gitee 优先的 Git 使用指南
+a449d54 从服务器同步最新代码（2026-11-03）
+```
+
+---
+
+### 步骤 9：推送到 GitHub（可选，用于备份）
+
+```bash
+git push origin main
+```
+
+**说明**：
+- GitHub 在国内访问可能不稳定，推送失败可忽略
+- 等网络恢复后重新推送即可
+
+---
+
+## 推送流程完整示例
+
+```bash
+# 1. 进入项目目录
+cd D:\Coding\QiuSport\live
+
+# 2. 查看当前状态
+git status
+
+# 3. 添加所有修改
+git add .
+
+# 4. 提交代码
+git commit -m "feat: 添加新功能描述"
+
+# 5. 推送到 Gitee
+git push gitee main
+
+# 6. 推送到 GitHub（可选）
+git push origin main
+```
+
+---
+
+## 常见问题处理
+
+### 问题 1：推送失败 - 远程分支不存在
+
+**错误信息**：
+```
+fatal: 'gitee' does not appear to be a git repository
+```
+
+**原因**：没有配置名为 `gitee` 的远程仓库
+
+**解决方案**：
+```bash
+# 添加 gitee 远程仓库
+git remote add gitee https://gitee.com/xinlee0606/football.git
+
+# 验证
+git remote -v
+```
+
+---
+
+### 问题 2：推送失败 - 本地落后于远程
+
+**错误信息**：
+```
+! [rejected] main -> main (fetch first)
+error: failed to push some refs to 'https://gitee.com/...'
+```
+
+**原因**：远程仓库有新的提交，本地落后于远程
+
+**解决方案**：
+```bash
+# 先拉取远程最新代码
+git pull gitee main
+
+# 解决冲突（如果有）
+# 然后重新提交
+git add .
+git commit -m "merge: 合并远程更新"
+
+# 再次推送
+git push gitee main
+```
+
+---
+
+### 问题 3：推送失败 - 认证错误
+
+**错误信息**：
+```
+remote: Incorrect username or password (access token)
+fatal: Authentication failed
+```
+
+**原因**：Gitee 密码或 Token 不正确
+
+**解决方案**：
+```bash
+# 更新远程仓库 URL（包含新的 Token）
+git remote set-url gitee https://xinlee0606:<NEW_TOKEN>@gitee.com/xinlee0606/football.git
+
+# 或使用 Git Credential Manager 重新登录
+git credential-manager erase
+# 然后重新推送，会弹出登录窗口
+git push gitee main
+```
+
+---
+
+### 问题 4：PowerShell 命令语法错误
+
+**错误信息**：
+```
+标记"&&"不是此版本中的有效语句分隔符
+```
+
+**原因**：PowerShell 不支持 `&&` 语法
+
+**解决方案**：使用分号 `;` 替代
+```powershell
+# 错误写法
+cd D:\Coding\QiuSport\live && git push gitee main
+
+# 正确写法
+cd D:\Coding\QiuSport\live; git push gitee main
+```
+
+---
+
+### 问题 5：推送后显示 Everything up-to-date
+
+**说明**：这不是错误！表示本地和远程已经完全同步，没有新的提交需要推送。
+
+**验证**：
+```bash
+git log gitee/main --oneline -1
+# 应该显示最新的 commit
+```
+
+---
+
+## 服务器推送流程
+
+服务器上的 Git 配置与本地不同，通常只有 `origin` 一个远程（指向 Gitee）。
+
+### 服务器推送步骤
+
+```bash
+# 1. 查看远程配置
+git remote -v
+# 输出：origin  https://gitee.com/xinlee0606/football.git
+
+# 2. 查看当前分支
+git branch
+# 输出：* main
+
+# 3. 推送到 Gitee（使用 origin）
+git push origin main
+
+# 或推送其他分支
+git push origin feature-tech
+```
+
+**注意**：
+- 服务器上使用 `origin` 而不是 `gitee`
+- 因为服务器的 `origin` 已经指向 Gitee
+
+---
+
+## 本地 vs 服务器配置对比
+
+| 环境 | 远程名称 | 仓库地址 | 推送命令 |
+|------|---------|---------|----------|
+| **本地** | `gitee` | `https://gitee.com/xinlee0606/football.git` | `git push gitee main` |
+| **本地** | `origin` | `https://github.com/xinlee0606/football.git` | `git push origin main` |
+| **服务器** | `origin` | `https://gitee.com/xinlee0606/football.git` | `git push origin main` |
+
+---
+
 ## 同步到服务器
 
 服务器路径：`/coding/live/`（ECS: 8.130.188.90）
