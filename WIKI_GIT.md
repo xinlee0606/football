@@ -4,7 +4,8 @@
 
 | 项目 | 值 |
 |------|------|
-| 远程仓库 | `https://github.com/xinlee0606/football.git` |
+| Gitee 仓库 | `https://gitee.com/xinlee0606/football.git` |
+| GitHub 仓库 | `https://github.com/xinlee0606/football.git` |
 | 默认分支 | `main` |
 | 本地路径 | `D:\Coding\QiuSport\live` |
 
@@ -412,27 +413,203 @@ git log gitee/main --oneline -1
 
 服务器上的 Git 配置与本地不同，通常只有 `origin` 一个远程（指向 Gitee）。
 
-### 服务器推送步骤
+### 完整推送步骤
+
+#### 步骤 1：SSH 登录服务器
 
 ```bash
-# 1. 查看远程配置
-git remote -v
-# 输出：origin  https://gitee.com/xinlee0606/football.git
+ssh root@8.130.188.90
+```
 
-# 2. 查看当前分支
+#### 步骤 2：进入项目目录
+
+```bash
+cd /coding/live
+```
+
+#### 步骤 3：查看当前分支
+
+```bash
 git branch
-# 输出：* main
+```
 
-# 3. 推送到 Gitee（使用 origin）
+**预期输出**：
+```
+* feature-tech
+  main
+```
+
+**说明**：
+- `*` 表示当前所在分支
+- 如果不在 `main` 分支，需要切换
+
+#### 步骤 4：切换到 main 分支（如需要）
+
+```bash
+git checkout main
+```
+
+#### 步骤 5：查看远程仓库配置
+
+```bash
+git remote -v
+```
+
+**预期输出**：
+```
+origin  https://xinlee0606:***@gitee.com/xinlee0606/football.git (fetch)
+origin  https://xinlee0606:***@gitee.com/xinlee0606/football.git (push)
+```
+
+**说明**：
+- 服务器只有 `origin` 一个远程，已指向 Gitee
+- 使用 `origin` 推送即可
+
+#### 步骤 6：拉取最新代码
+
+```bash
+git pull origin main --rebase
+```
+
+**预期输出**：
+```
+From https://gitee.com/xinlee0606/football
+ * branch            main       -> FETCH_HEAD
+   8b9b5c2..64e906c  main       -> origin/main
+Updating 8b9b5c2..64e906c
+Fast-forward
+ WIKI_GIT.md | 345 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 345 insertions(+)
+```
+
+**说明**：
+- 使用 `--rebase` 保持提交历史清晰
+- 如果有冲突，需要手动解决
+
+#### 步骤 7：查看当前状态
+
+```bash
+git status
+```
+
+**预期输出**：
+```
+On branch main
+nothing to commit, working tree clean
+```
+
+#### 步骤 8：查看提交历史
+
+```bash
+git log --oneline -5
+```
+
+**预期输出**：
+```
+64e906c docs: 添加完整的 Gitee 推送流程文档
+8b9b5c2 不包含技术统计指标特征
+dbd5d23 不包含技术统计指标特征
+96ec7c9 Backup 3 models (20261101): OVER/UNDER/UPSIDE + core scripts
+```
+
+#### 步骤 9：推送到 Gitee
+
+```bash
 git push origin main
+```
 
-# 或推送其他分支
+**预期输出**：
+```
+To https://gitee.com/xinlee0606/football.git
+   8b9b5c2..64e906c  main -> main
+```
+
+**说明**：
+- 如果显示 `Everything up-to-date`，表示远程已经是最新状态
+- 最后一行显示推送成功：`8b9b5c2..64e906c  main -> main`
+
+#### 步骤 10：验证推送结果
+
+```bash
+# 查看远程分支
+git branch -r
+
+# 查看最新提交
+git log --oneline -3
+```
+
+**预期输出**：
+```
+origin/feature-tech
+origin/main
+
+64e906c docs: 添加完整的 Gitee 推送流程文档
+8b9b5c2 不包含技术统计指标特征
+dbd5d23 不包含技术统计指标特征
+```
+
+---
+
+### 一键推送脚本
+
+可以使用 Python 脚本自动完成上述流程：
+
+```python
+"""从服务器推送代码到 Gitee - 完整流程"""
+import paramiko
+
+ssh = paramiko.SSHClient()
+ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+ssh.connect('8.130.188.90', username='root', password='Xin7231013@@@')
+
+def run_cmd(cmd):
+    stdin, stdout, stderr = ssh.exec_command(cmd)
+    return stdout.read().decode('utf-8'), stderr.read().decode('utf-8')
+
+# 1. 切换到 main 分支
+run_cmd('cd /coding/live && git checkout main')
+
+# 2. 拉取最新代码
+output, error = run_cmd('cd /coding/live && git pull origin main --rebase 2>&1')
+print(output)
+
+# 3. 推送到 Gitee
+output, error = run_cmd('cd /coding/live && git push origin main 2>&1')
+print(output)
+
+# 4. 验证结果
+output, error = run_cmd('cd /coding/live && git log --oneline -3')
+print(output)
+
+ssh.close()
+```
+
+---
+
+### 推送其他分支
+
+如果需要推送其他分支（如 `feature-tech`）：
+
+```bash
+# 切换到目标分支
+git checkout feature-tech
+
+# 拉取最新代码
+git pull origin feature-tech --rebase
+
+# 推送到 Gitee
 git push origin feature-tech
 ```
 
-**注意**：
-- 服务器上使用 `origin` 而不是 `gitee`
-- 因为服务器的 `origin` 已经指向 Gitee
+---
+
+### 注意事项
+
+1. **服务器使用 `origin`**：服务器上的 `origin` 已指向 Gitee，不要使用 `gitee` 远程名称
+2. **先拉取再推送**：推送前务必先 `git pull`，避免冲突
+3. **使用 `--rebase`**：保持提交历史清晰，避免合并提交
+4. **检查分支**：确保在正确的分支上操作
+5. **验证结果**：推送后使用 `git log` 和 `git branch -r` 验证
 
 ---
 
@@ -455,7 +632,8 @@ git push origin feature-tech
 ```bash
 # SSH 登录服务器后
 cd /coding/live
-git pull origin main
+git pull gitee main    # 从 Gitee 拉取
+git pull origin main   # 或从 GitHub 拉取
 ```
 
 ### 方式二：SCP 上传
@@ -481,33 +659,52 @@ sudo yum install -y git
 
 # 配置用户信息
 git config --global user.name "xinlee0606"
-git config --global user.email "xinlee0606@github.com"
+git config --global user.email "xinlee0606@gitee.com"
 
-# 克隆仓库（首次）
+# 克隆仓库（首次）- 使用 Gitee（国内速度快）
 cd /coding
-git clone https://github.com/xinlee0606/football.git live
+git clone https://gitee.com/xinlee0606/football.git live
+
+# 配置远程仓库（添加 GitHub 作为备用）
+cd live
+git remote add origin https://github.com/xinlee0606/football.git
 
 # 配置认证（二选一）
-# 1. 使用 Personal Access Token
-git remote set-url origin https://<TOKEN>@github.com/xinlee0606/football.git
+# 1. 使用 Gitee Personal Access Token
+git remote set-url gitee https://<TOKEN>@gitee.com/xinlee0606/football.git
 
 # 2. 使用 SSH Key
-ssh-keygen -t ed25519 -C "xinlee0606@github.com"
-# 将 ~/.ssh/id_ed25519.pub 添加到 GitHub Settings → SSH Keys
-git remote set-url origin git@github.com:xinlee0606/football.git
+ssh-keygen -t ed25519 -C "xinlee0606@gitee.com"
+# 将 ~/.ssh/id_ed25519.pub 添加到 Gitee Settings → SSH Keys
+git remote set-url gitee git@gitee.com:xinlee0606/football.git
 ```
 
 ---
 
 ## 认证方式配置
 
-### 方式一：Personal Access Token（推荐）
+### 方式一：Gitee Personal Access Token（推荐）
+
+1. Gitee → 设置 → 私人令牌 → 生成新令牌
+2. 创建 token，勾选 `projects` 权限
+3. 推送时使用 token 作为密码：
+   ```bash
+   git push gitee main
+   # Username: xinlee0606
+   # Password: <粘贴token>
+   ```
+4. 或嵌入 URL（不推荐，token 会明文存储）：
+   ```bash
+   git remote set-url gitee https://<TOKEN>@gitee.com/xinlee0606/football.git
+   ```
+
+### 方式二：GitHub Personal Access Token
 
 1. GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens
 2. 创建 token，勾选 `Contents: Read and write` 权限
 3. 推送时使用 token 作为密码：
    ```bash
-   git push
+   git push origin main
    # Username: xinlee0606
    # Password: <粘贴token>
    ```
@@ -515,19 +712,6 @@ git remote set-url origin git@github.com:xinlee0606/football.git
    ```bash
    git remote set-url origin https://<TOKEN>@github.com/xinlee0606/football.git
    ```
-
-### 方式二：GitHub CLI
-
-```powershell
-# 安装
-winget install GitHub.cli
-
-# 登录
-gh auth login
-
-# 登录后 git push 自动使用认证
-git push
-```
 
 ### 方式三：Git Credential Manager
 
@@ -545,16 +729,17 @@ git push   # 首次弹出登录窗口，后续自动记住
 ```
 1. 本地修改代码
 2. git add + git commit 提交
-3. git push 推送到 GitHub
-4. 服务器 git pull 拉取最新代码
-5. 在服务器上运行/测试
+3. git push gitee main 推送到 Gitee（国内速度快）
+4. git push origin main 推送到 GitHub（可选，用于备份）
+5. 服务器 git pull gitee main 拉取最新代码
+6. 在服务器上运行/测试
 ```
 
 ### 模型训练流程
 
 ```
-1. 修改特征/训练脚本 → git commit + push
-2. 服务器 git pull 同步
+1. 修改特征/训练脚本 → git commit + push gitee main
+2. 服务器 git pull gitee main 同步
 3. 服务器执行训练（后台运行）：
    setsid bash train_over_only.sh > logs/train_over.log 2>&1 &
 4. 训练完成后模型产物保存在 models/ 目录（不纳入 git）
