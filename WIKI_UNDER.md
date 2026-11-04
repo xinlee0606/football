@@ -173,12 +173,12 @@ RHO_GRID = [-0.30, -0.28, ..., 0.00, ..., 0.28, 0.30]  # 步长 0.02
 6. **Isotonic 校准**：在验证集上拟合校准曲线
 7. **EV 阈值选取**：在留出集上以期望收益最优选择 P_pool 阈值
 
-### 四步使用流程
+### 三步使用流程
 
 ```bash
-# 服务器执行
-./venv/bin/python -u backtest_under.py     # 1. 滚动前进回测(前70%起步按月扩窗重训) -> backtest_under_result.json
-./venv/bin/python -u train_under.py        # 2. 全量训练生成生产模型 -> models/ (带日期tag+latest_under.json)
+# 服务器执行（顺序不可颠倒：先训练→再回测→最后预测）
+./venv/bin/python -u train_under.py        # 1. 全量训练生成生产模型 -> models/ (带日期tag+latest_under.json)
+./venv/bin/python -u backtest_under.py     # 2. 滚动前进回测(前70%起步按月扩窗重训) -> backtest_under_result.json
 ./venv/bin/python -u predict_under.py      # 3. 每日预测
 ```
 
