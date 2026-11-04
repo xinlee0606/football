@@ -40,7 +40,9 @@ MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models')
 def _add_missing_indicators(df, feats):
     """为所有特征列添加缺失指示器(1=缺失, 0=非缺失)"""
     indicator_cols = []
-    for col in feats:
+    # 只为原始特征创建指示器，跳过已经是指示器的列
+    original_feats = [f for f in feats if not f.endswith('_missing')]
+    for col in original_feats:
         if col not in df.columns:
             continue
         indicator_name = f'{col}_missing'
@@ -56,7 +58,7 @@ def _add_missing_indicators(df, feats):
 TRAIN_RATIO = 0.70          # 训练集占比(按时间顺序)
 VALID_RATIO = 0.15          # 留出集占比(选α/rho/阈值/早停)
 MAX_GOALS = 8               # 比分矩阵截断进球数
-TOP_PICKS = 11              # 推荐比分个数(每场下注注数, 与OVER池大小一致)
+TOP_PICKS = 9               # 推荐比分个数(每场下注注数, 与OVER池大小一致)
 
 LGB_CLF_PARAMS = dict(
     objective='binary', n_estimators=600, learning_rate=0.05,
@@ -225,6 +227,15 @@ def train_over(df_train, df_valid, feats, verbose=True):
     # 用中位数填充训练集和验证集的缺失值
     X_tr = df_train[feats].fillna(df_train[feats].median())
     X_va = df_valid[feats].fillna(df_valid[feats].median())
+    
+    # 确保所有特征列都是数值类型
+    for col in X_tr.columns:
+        X_tr[col] = pd.to_numeric(X_tr[col], errors='coerce')
+        X_va[col] = pd.to_numeric(X_va[col], errors='coerce')
+    
+    # 再次填充（如果有新产生的NaN）
+    X_tr = X_tr.fillna(0)
+    X_va = X_va.fillna(0)
     y_tr, y_va = df_train['y'], df_valid['y']
 
     # --- 1. 池内筛选LightGBM ---
@@ -381,6 +392,12 @@ def predict_rows(model, df):
         # 更新feats以包含指示器列
         feats = [f for f in feats if f in X.columns] + indicator_cols
         X = X.fillna(fill_medians)
+    
+    # 确保所有特征列都是数值类型
+    for col in X.columns:
+        X[col] = pd.to_numeric(X[col], errors='coerce')
+    X = X.fillna(0)
+    
     d['p_lgb'] = _proba_pool(model['clf'], X)
     d['lambda_home'] = np.clip(model['goals']['home'].predict(X), 0.1, 4.5)
     d['lambda_away'] = np.clip(model['goals']['away'].predict(X), 0.1, 4.5)

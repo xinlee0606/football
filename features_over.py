@@ -25,7 +25,7 @@ from config import DB_CONFIG
 
 # ==================== 常量 ====================
 # OVER模型专用 OVER：完全对称（主胜3+平局3+客胜3），按全库赛果频率Top9选取（2026-10-12重构）
-OVER = ['1-0', '2-0', '2-1', '0-0', '1-1', '2-2', '0-1', '0-2', '1-2']
+OVER = ['2-1', '1-2', '2-2', '3-1', '3-0', '0-3', '3-2', '1-3', '2-3']
 OVER_SET = set(OVER)
 
 # 别名（兼容train_over.py等脚本的导入）
@@ -44,6 +44,7 @@ PREDICT_HANDICAP_NUMS_OVER = {0.0, -0.25, 0.25}
 # 全库分档显示 OVER 池内命中率随大小球线单调下降, OU>3.25 档 ROI 崩至~0(低分池难命中),
 # 故训练/回测/预测统一过滤掉终盘大小球线 > 3.25 的比赛; 数据缺失则不误杀(保留)。
 MAX_OU_LINE_OVER = 3.25
+MIN_OU_LINE_OVER = 2.5          # 大小球线下限(OVER模型只预测2.5球以上的比赛)
 
 
 # Time decay parameter for recent form weighting
@@ -77,8 +78,10 @@ def is_cup_league_over(league):
     return '杯' in str(league)
 
 
-def is_valid_ou_line_over(ou_line_cur_mean, ou_line_init_mean=None):
-    """判断大小球线是否满足上限(排除进球大战死区): 终盘线(缺失用初盘) <= MAX_OU_LINE_OVER
+
+
+def is_valid_ou_line_lower_over(ou_line_cur_mean, ou_line_init_mean=None):
+    """判断大小球线是否满足下限: 终盘线(缺失用初盘) >= MIN_OU_LINE_OVER
     初终盘均缺失时返回 True(不因数据缺失误杀比赛)。"""
     v = ou_line_cur_mean
     if v is None:
@@ -86,7 +89,22 @@ def is_valid_ou_line_over(ou_line_cur_mean, ou_line_init_mean=None):
     if v is None:
         return True
     try:
-        return float(v) <= MAX_OU_LINE_OVER
+        return float(v) >= MIN_OU_LINE_OVER
+    except (ValueError, TypeError):
+        return True
+
+
+def is_valid_ou_line_over(ou_line_cur_mean, ou_line_init_mean=None):
+    """判断大小球线是否满足范围: MIN_OU_LINE_OVER <= 终盘线(缺失用初盘) <= MAX_OU_LINE_OVER
+    初终盘均缺失时返回 True(不因数据缺失误杀比赛)。"""
+    v = ou_line_cur_mean
+    if v is None:
+        v = ou_line_init_mean
+    if v is None:
+        return True
+    try:
+        fv = float(v)
+        return fv >= MIN_OU_LINE_OVER and fv <= MAX_OU_LINE_OVER
     except (ValueError, TypeError):
         return True
 
