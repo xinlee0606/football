@@ -22,7 +22,7 @@
 
 ### 72 个特征清单（无未来函数）
 
-#### ① 亚盘（14个） — `asian_features()`
+#### ① 亚盘（14个） — `asian_features_upside()`
 | 特征 | 含义 |
 |------|------|
 | `asian_n` | 机构数 |
@@ -40,7 +40,7 @@
 | `aw_cur_diff` | 终盘主客水位差 |
 | `aw_drift` | 水位漂移（终盘水位差 − 初盘水位差） |
 
-#### ② 大小球（8个） — `over_under_features()`
+#### ② 大小球（8个） — `over_under_features_upside()`
 | 特征 | 含义 |
 |------|------|
 | `ou_n` | 机构数 |
@@ -52,7 +52,7 @@
 | `over_prob_cur` | 终盘大球隐含概率 |
 | `exp_total` | 期望总进球（终盘大小球线，缺失则用初盘） |
 
-#### ③ 欧赔（11个） — `euro_features()`
+#### ③ 欧赔（11个） — `euro_features_upside()`
 | 特征 | 含义 |
 |------|------|
 | `euro_n` | 欧赔公司数 |
@@ -62,7 +62,7 @@
 | `euro_return_mean` | 平均返还率 |
 | `euro_win_move` | 主胜概率变动（即时 − 初盘） |
 
-#### ④ 对战往绩（11个） — `_h2h_features_fast()`
+#### ④ 对战往绩（11个） — `_h2h_features_upside_fast()`
 | 特征 | 含义 |
 |------|------|
 | `h2h_n` | 往绩场数 |
@@ -74,12 +74,12 @@
 | `h2h_half_goal_avg` | 往绩场均半场进球（half_score 覆盖率100%） |
 | `h2h_corners_avg` | 往绩场均总角球（corners 覆盖率91%） |
 
-#### ⑤ 近10场战绩（20个） — `_recent_form_features_fast()`
+#### ⑤ 近10场战绩（20个） — `_recent_form_features_upside_fast()`
 主队10个（`recent_` 前缀）: `recent_n`（场数）、`recent_win_rate`（胜率）、`recent_draw_rate`（平率）、`recent_loss_rate`（负率）、`recent_goals_for_mean`（场均进球）、`recent_goals_against_mean`（场均失球）、`recent_clean_sheet_rate`（零封率）、`recent_btts_rate`（双方进球率）、`recent_over_25_rate`（大于2.5球率）、`recent_unbeaten_rate`（不败率）
 
 客队10个：同上（通过 `is_home=False` 参数获取）
 
-#### ⑥ 联赛统计（8个） — `_league_stats_features_fast()`
+#### ⑥ 联赛统计（8个） — `_league_stats_features_upside_fast()`
 | 特征 | 含义 |
 |------|------|
 | `league_n` | 联赛场数 |
@@ -99,11 +99,11 @@
 
 | 源表 | 特征函数 | 说明 |
 |------|----------|------|
-| `asian_odds` | `asian_features()` | 亚盘初盘+终盘盘口/水位 |
-| `over_under_odds` | `over_under_features()` | 大小球初盘+终盘线/赔率 |
-| `european_odds` | `euro_features()` | 欧赔胜/平/负初盘+即时（数据源 `scrape_euro_odds.py`） |
-| `head_to_head` | `_h2h_features_fast()` | 对赛往绩（含半场比分、角球） |
-| `match` | `_recent_form_features_fast()` / `_league_stats_features_fast()` | 近期战绩 + 联赛统计 |
+| `asian_odds` | `asian_features_upside()` | 亚盘初盘+终盘盘口/水位 |
+| `over_under_odds` | `over_under_features_upside()` | 大小球初盘+终盘线/赔率 |
+| `european_odds` | `euro_features_upside()` | 欧赔胜/平/负初盘+即时（数据源 `scrape_euro_odds.py`） |
+| `head_to_head` | `_h2h_features_upside_fast()` | 对赛往绩（含半场比分、角球） |
+| `match` | `_recent_form_features_upside_fast()` / `_league_stats_features_upside_fast()` | 近期战绩 + 联赛统计 |
 
 ### 防数据泄漏
 
@@ -295,7 +295,7 @@ python -u backtest_under.py --ratio 0.75   # 指定首轮训练占比
 |--------|-------|-------|
 | 比分池 | 11种(BTTS, 总进球≤6) | 9种(完全对称, 含零封) |
 | 零封比分 | 无 | 1-0, 0-1, 0-0 |
-| 大小球过滤 | 下限 训练≥2.25 / 推荐≥2.50 | 上限 终盘≤3.25（不设下限） |
+| 大小球过滤 | 下限 ≥2.25（无上限） | 上限 终盘≤3.25（不设下限） |
 | 盘口范围 | 训练=推荐(五种) | 训练五种 / **推荐仅 平手・受让平半・平半** |
 | 投注注数 | 11注/场 | 9注/场 |
 | 盈亏公式 | 命中=SP-11, 未中=-11 | 命中=SP-9, 未中=-9 |
@@ -348,4 +348,4 @@ A: 1) 运行 `backtest_under.py` 确认 AUC 和命中率；2) 检查特征是否
 | 9p_v6 | 2026-10-13 | h2h 往绩特征+2：新增 `h2h_half_goal_avg`（场均半场进球,覆盖率100%）+`h2h_corners_avg`（场均角球,覆盖率91%）；数据源从 match 表切换到 head_to_head 表。特征 49→51。重训 tag=20261013：验收命中 82.7%（阈值0.80），滚动回测命中 82.3%/ROI +11.7% |
 | 9p_v7 | 2026-10-13 | 新增 `european_odds` 表 + `scrape_euro_odds.py` 欧赔数据补录脚本（数据源 `1x2d.titan007.com/{id}.js`，每场~130家公司胜平负初盘+即时赔率）；后台全量补录中 |
 | 9p_v8 | 2026-10-14 | 欧赔特征集成：新增 `euro_features()` 函数（11个特征：公司数、初/即时隐含胜平负概率、公司间分歧度、返还率、主胜概率变动），数据从 `european_odds` 表批量加载。特征 51→62。三模型全部重训 tag=20261014 |
-| 9p_v9 | 2026-10-25 | 特征工程重构：移除 P0/P1/P2 特征和技术统计特征（覆盖率不足），统一函数命名（去除 `_upside` 后缀），特征稳定在 72 个（14亚盘+8大小球+11欧赔+11交锋+20近期战绩+8联赛统计）。重训 tag=20261025 |
+| 9p_v9 | 2026-10-25 | 特征工程重构：移除 P0/P1/P2 特征和技术统计特征（覆盖率不足），特征稳定在 72 个（14亚盘+8大小球+11欧赔+11交锋+20近期战绩+8联赛统计）。UNDER 模型特征函数仍使用 `_upside` 后缀（`asian_features_upside` 等）。重训 tag=20261025 |
