@@ -469,6 +469,11 @@ def main():
         unfinished = unfinished[unfinished['match_id'].str.startswith(args.date)]
     if unfinished.empty:
         print(f"日期{args.date}无未开赛比赛")
+        # 空仓也发送邮件，包含回顾内容
+        if not args.skip_email:
+            subject = f"UNDER比分预测 {args.date} 空仓"
+            content = '\n'.join(review_lines) if review_lines else '今日无未开赛比赛'
+            send_email(subject, content)
         return
     # 盘口筛选(推荐窄口径: 只推 平手/受让平半/平半; 训练仍用宽口径 TARGET_HANDICAPS_9P)
     handicap_mask = unfinished.apply(
@@ -485,6 +490,11 @@ def main():
     print(f"过滤: {before_hc}场 → 盘口筛选 → 排除杯赛/大小球上限 → {len(unfinished)}场")
     if unfinished.empty:
         print(f"日期{args.date}无满足过滤条件的未开赛比赛")
+        # 空仓也发送邮件，包含回顾内容
+        if not args.skip_email:
+            subject = f"UNDER比分预测 {args.date} 空仓"
+            content = '\n'.join(review_lines) if review_lines else '今日无满足过滤条件的比赛'
+            send_email(subject, content)
         return
     print(f"待预测比赛: {len(unfinished)}场\n")
 
