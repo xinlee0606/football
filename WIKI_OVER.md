@@ -684,3 +684,571 @@ A: 配置 crontab 定时任务，见各模型的"定时部署"章节。
 | v9 | 2026-10-14 | OVER/UNDER/UPSIDE | 欧赔特征集成：新增 `euro_features_upside()` 函数（11个特征：公司数、初/即时隐含胜平负概率、公司间分歧度、返还率、主胜概率变动），数据从 `european_odds` 表批量加载。9P 特征 51→62、ML 特征 56→67、UPSIDE 同步新增。三模型全部重训 tag=20261014 |
 | v10 | 2026-10-21 | OVER/UNDER/UPSIDE | P0/P1/P2特征工程：新增联赛积分榜详细特征(28个/模型)、交锋初始盘口特征(5个/模型)、页面盘口/排名特征(5个/模型)；技术统计特征(30个/模型)。OVER比分池 8→11（+3-3/4-2/2-4），投注 11注/场。特征文件重命名：`features_upside_over.py`→`features_over.py`、`features_upside_under.py`→`features_under.py`。训练文件：`train_model.py`→`train_over.py`。三模型全部重训 |
 | v11 | 2026-10-25 | OVER/UNDER | 移除技术统计特征（30个）：覆盖率不足（全量60%）、缺失值导致模型效果变差。OVER/UNDER 特征从 ~108/~98 降至 **62个**。添加多进程并行优化（`multiprocessing.Pool`），训练提速 4-6倍 |
+
+---
+
+# 数据处理与特征工程关键逻辑
+
+> 本文档记录 OVER/UNDER 模型的数据处理流程、特征工程关键逻辑和最新代码实现细节，便于后续回顾、分析和调整。
+
+## 一、数据预处理流程
+
+### 1.1 数据源
+
+| 数据表 | 用途 | 关键字段 |
+|--------|------|----------|
+| `match` | 比赛基本信息 | match_id, league, home_team, away_team, score, match_time |
+| `asian_odds` | 亚盘赔率 | initial_handicap, current_handicap, initial_home_odds, initial_away_odds |
+| `over_under_odds` | 大小球赔率 | initial_line, current_line, initial_over_odds, initial_under_odds |
+| `european_odds` | 欧赔 | initial_win_odds, initial_draw_odds, initial_loss_odds |
+| `match_history` | 历史交锋 | home_team, away_team, score, half_score, corners |
+| `team_recent` | 近期战绩 | team, score, shots, shots_on_target, corners, dangerous_attacks, possession, fouls, yellow_cards |
+
+### 1.2 数据清洗规则
+
+```python
+# 比分解析
+def parse_score(score):
+    try:
+        if pd.isna(score) or score == '' or score == 'nan':
+            return None, None
+        parts = str(score).split('-')
+        if len(parts) == 2:
+            return int(parts[0].strip()), int(parts[1].strip())
+    except:
+        pass
+    return None, None
+
+# 数值转换
+def to_float(v):
+    try:
+        if v is None or v == '' or v == 'nan':
+            return None
+        return float(v)
+    except:
+        return None
+
+# 盘口转换
+def handicap_to_num(h):
+    """将盘口字符串转换为数值"""
+    mapping = {
+        '受让球半': 1.5, '受让一球/球半': 1.25, '受让一球': 1.0,
+        '受让半球/一球': 0.75, '受让半球': 0.5, '受让平/半': 0.25,
+        '平手': 0.0, '平/半': -0.25, '半球': -0.5,
+        '半球/一球': -0.75, '一球': -1.0, '一球/球半': -1.25,
+        '球半': -1.5
+    }
+    return mapping.get(str(h).strip(), None)
+```
+
+---
+
+## 二、特征工程关键逻辑
+
+### 2.1 时间衰减机制
+
+**所有近期战绩特征（含技术统计）都应用了时间衰减权重。**
+
+```python
+# 时间衰减参数
+TIME_DECAY_LAMBDA = 0.08  # 指数衰减率
+
+# 权重计算公式
+# w_i = exp(-λ × (n-1-i))
+# 其中：n=总场数, i=索引(0=最旧, n-1=最新)
+# 最新比赛权重=1.0，越旧的比赛权重越低
+
+weights = [np.exp(-TIME_DECAY_LAMBDA * (n - 1 - i)) for i in range(n)]
+total_weight = sum(weights)
+```
+
+**权重示例（10场比赛）：**
+
+| 比赛位置 | 索引 i | 权重计算 | 权重值 |
+|---------|--------|---------|--------|
+| 最新（第10场） | 9 | exp(-0.08×0) | **1.000** |
+| 第9场 | 8 | exp(-0.08×1) | **0.923** |
+| 第8场 | 7 | exp(-0.08×2) | **0.852** |
+| 第7场 | 6 | exp(-0.08×3) | **0.787** |
+| 第6场 | 5 | exp(-0.08×4) | **0.726** |
+| 第5场 | 4 | exp(-0.08×5) | **0.670** |
+| 第4场 | 3 | exp(-0.08×6) | **0.619** |
+| 第3场 | 2 | exp(-0.08×7) | **0.571** |
+| 第2场 | 1 | exp(-0.08×8) | **0.527** |
+| 最旧（第1场） | 0 | exp(-0.08×9) | **0.487** |
+
+**应用范围：**
+- ✅ 近期战绩特征（胜负率、进球数等）
+- ✅ 技术统计特征（射门、射正、角球等7项）
+- ✅ 主客场分离（h_rf_*, a_rf_*）
+
+---
+
+### 2.2 技术统计特征（19个）
+
+**OVER 和 UNDER 模型都使用了相同的19个技术统计特征：**
+
+#### ① 交锋技术统计（1个）
+- `h2h_corners_avg` - 历史交锋角球平均数
+
+#### ② 主队近期技术统计（7个）
+- `h_rf_shots_mean` - 主队近期射门平均数（时间衰减加权）
+- `h_rf_sot_mean` - 主队近期射正平均数
+- `h_rf_corners_mean` - 主队近期角球平均数
+- `h_rf_danger_mean` - 主队近期危险进攻平均数
+- `h_rf_poss_mean` - 主队近期控球率平均数
+- `h_rf_fouls_mean` - 主队近期犯规平均数
+- `h_rf_yellow_mean` - 主队近期黄牌平均数
+
+#### ③ 客队近期技术统计（7个）
+- `a_rf_shots_mean` - 客队近期射门平均数
+- `a_rf_sot_mean` - 客队近期射正平均数
+- `a_rf_corners_mean` - 客队近期角球平均数
+- `a_rf_danger_mean` - 客队近期危险进攻平均数
+- `a_rf_poss_mean` - 客队近期控球率平均数
+- `a_rf_fouls_mean` - 客队近期犯规平均数
+- `a_rf_yellow_mean` - 客队近期黄牌平均数
+
+#### ④ 组合技术统计特征（4个）
+- `possession_diff` - 控球率差值（主-客）
+- `corners_diff` - 角球差值
+- `fouls_diff` - 犯规差值
+- `yellow_diff` - 黄牌差值
+
+**特征质量：**
+- 缺失率：约0.03%（极低）
+- 数据源：team_recent 表
+- 更新频率：每场比赛后更新
+
+---
+
+### 2.3 盘口特征缺失值处理
+
+**亚盘特征（14个）：**
+
+```python
+def asian_features(rows):
+    feats = {k: None for k in keys}  # 初始化为 None
+    
+    for r in rows:
+        v_i = handicap_to_num(r['initial_handicap'])
+        v_c = handicap_to_num(r['current_handicap'])
+        
+        # ✅ 即时盘缺失 → 用初盘填充
+        if v_c is None:
+            v_c = v_i
+        
+        if v_i is not None:
+            ih.append(v_i)
+        if v_c is not None:
+            ch.append(v_c)
+    
+    # ✅ 仅当有数据时才计算
+    if ih:
+        feats['ah_init_mean'] = _mean(ih)
+        feats['ah_init_std'] = _std(ih)
+    if ch:
+        feats['ah_cur_mean'] = _mean(ch)
+    if ih and ch:  # 两者都有才计算变动
+        feats['ah_move'] = _mean(ch) - _mean(ih)
+```
+
+**处理逻辑：**
+- ✅ 即时盘缺失 → 用初盘填充
+- ✅ 部分数据缺失 → 仅计算有数据的部分
+- ✅ 完全无数据 → 返回全 None（后续由中位数填充）
+
+---
+
+### 2.4 大小球特征缺失值处理
+
+**大小球特征（8个）：**
+
+```python
+def over_under_features(rows):
+    feats = {k: None for k in keys}
+    
+    for r in rows:
+        v_i = to_float(r['initial_line'])
+        v_c = to_float(r['current_line'])
+        
+        # ✅ 即时大小球线缺失 → 用初盘填充
+        if v_c is None:
+            v_c = v_i
+    
+    # ✅ 仅当有数据时才计算
+    if li:
+        feats['ou_line_init_mean'] = _mean(li)
+    if lc:
+        feats['ou_line_cur_mean'] = _mean(lc)
+    if li and lc:  # 两者都有才计算变动
+        feats['ou_line_move'] = _mean(lc) - _mean(li)
+    
+    # ✅ 隐含概率需要大球和小球赔率都存在
+    if lo_i and uo_i:
+        feats['over_prob_init'] = _mean([u / (o + u) for o, u in zip(lo_i, uo_i)])
+```
+
+**处理逻辑：**
+- ✅ 即时盘缺失 → 用初盘填充
+- ✅ 赔率缺失 → 不计算该特征（保持 None）
+- ✅ 隐含概率计算 → 需要大球和小球赔率都存在
+
+---
+
+### 2.5 欧赔特征缺失值处理
+
+**欧赔特征（11个）：**
+
+```python
+def euro_features(rows):
+    feats = {k: None for k in keys}
+    
+    for r in rows:
+        iw = to_float(r['initial_win_odds'])
+        id_ = to_float(r['initial_draw_odds'])
+        il = to_float(r['initial_loss_odds'])
+        
+        # ✅ 严格校验：三个赔率都必须存在且 > 1
+        if iw and id_ and il and iw > 1 and id_ > 1 and il > 1:
+            inv_w, inv_d, inv_l = 1/iw, 1/id_, 1/il
+            total = inv_w + inv_d + inv_l
+            
+            # ✅ 去水归一化
+            pw_i.append(inv_w / total)
+            pd_i.append(inv_d / total)
+            pl_i.append(inv_l / total)
+```
+
+**处理逻辑：**
+- ✅ 严格校验 → 三个赔率（胜/平/负）都必须存在且 > 1
+- ✅ 去水归一化 → `P = (1/odds) / sum(1/odds)`
+- ✅ 任一赔率缺失 → 不计算该场比赛的隐含概率
+
+---
+
+### 2.6 交锋特征缺失值处理
+
+**交锋特征（11个）：**
+
+```python
+def _h2h_features_fast(home_team, away_team, h2h_data, max_h2h=10):
+    feats = {k: None for k in keys}
+    
+    h2h_rows = h2h_data[:max_h2h]
+    n = len(h2h_rows)
+    
+    # ✅ 无交锋记录 → 返回全 None
+    if n == 0:
+        return feats
+    
+    for match in h2h_rows:
+        hg, ag = parse_score(match['score'])
+        
+        # ✅ 比分解析失败 → 跳过该场
+        if hg is None:
+            continue
+    
+    # ✅ 仅当有有效数据时才计算
+    if goals_list:
+        feats['h2h_n'] = n
+        feats['h2h_home_win_rate'] = home_wins / n
+        feats['h2h_avg_goals'] = _mean(goals_list)
+    
+    # ✅ 可选特征（半场、角球）→ 有数据才计算
+    if half_goals_list:
+        feats['h2h_half_goal_avg'] = _mean(half_goals_list)
+    if corners_list:
+        feats['h2h_corners_avg'] = _mean(corners_list)
+```
+
+**处理逻辑：**
+- ✅ 无交锋记录 → 返回全 None
+- ✅ 比分解析失败 → 跳过该场比赛
+- ✅ 可选特征（半场、角球）→ 有数据才计算，无数据保持 None
+
+---
+
+### 2.7 联赛特征缺失值处理
+
+**联赛特征（8个）：**
+
+```python
+def _league_stats_features_fast(league, league_data):
+    feats = {k: None for k in keys}
+    
+    n = len(league_data)
+    
+    # ✅ 无联赛数据 → 返回全 None
+    if n == 0:
+        return feats
+    
+    for match in league_data:
+        hg, ag = parse_score(match['score'])
+        
+        # ✅ 比分解析失败 → 跳过
+        if hg is None:
+            continue
+    
+    # ✅ 仅当有进球数据时才计算
+    if goals_list:
+        feats['league_n'] = n
+        feats['league_home_win_rate'] = home_wins / n
+        feats['league_avg_goals'] = _mean(goals_list)
+```
+
+**处理逻辑：**
+- ✅ 无联赛数据 → 返回全 None
+- ✅ 比分解析失败 → 跳过该场比赛
+- ✅ 仅计算有数据的部分
+
+---
+
+### 2.8 近期战绩特征缺失值处理
+
+**近期战绩特征（20个，含技术统计）：**
+
+```python
+def _recent_form_features_fast(team_name, team_data, is_home=True, league_avgs=None):
+    feats = {k: None for k in keys}
+    
+    n = len(team_data)
+    
+    # ✅ 无近期比赛 → 返回全 None
+    if n == 0:
+        return feats
+    
+    # 计算胜负率等（仅当有有效比分时）
+    if goals_for_count > 0:
+        feats['recent_n'] = n
+        feats['recent_win_rate'] = wins / total_weight
+        feats['recent_goals_for_mean'] = goals_for_w / total_weight
+    
+    # ✅ 技术统计缺失 → 用联赛平均值填充
+    feats['rf_shots_mean'] = (shots_w / shots_count) if shots_count > 0 else league_avgs.get('shots')
+    feats['rf_sot_mean'] = (sot_w / sot_count) if sot_count > 0 else league_avgs.get('shots_on_target')
+    feats['rf_corners_mean'] = (corners_w / corners_count) if corners_count > 0 else league_avgs.get('corners')
+    feats['rf_danger_mean'] = (danger_w / danger_count) if danger_count > 0 else league_avgs.get('dangerous_attacks')
+    feats['rf_poss_mean'] = (poss_w / poss_count) if poss_count > 0 else league_avgs.get('possession')
+    feats['rf_fouls_mean'] = (fouls_w / fouls_count) if fouls_count > 0 else league_avgs.get('fouls')
+    feats['rf_yellow_mean'] = (yellow_w / yellow_count) if yellow_count > 0 else league_avgs.get('yellow_cards')
+```
+
+**处理逻辑：**
+- ✅ 无近期比赛 → 返回全 None
+- ✅ 比分解析失败 → 跳过该场比赛
+- ✅ 技术统计缺失 → 用联赛平均值填充
+
+---
+
+## 三、缺失值处理三层机制
+
+### 3.1 第一层：特征生成阶段
+
+| 特征类型 | 缺失处理策略 |
+|---------|-------------|
+| 盘口特征 | 即时盘缺失 → 用初盘填充 |
+| 大小球特征 | 即时盘缺失 → 用初盘填充 |
+| 欧赔特征 | 严格校验，任一赔率缺失 → 不计算 |
+| 交锋特征 | 无数据 → 返回全 None |
+| 联赛特征 | 无数据 → 返回全 None |
+| 近期战绩 | 无数据 → 返回全 None |
+| 技术统计 | 球队无数据 → 用联赛平均值填充 |
+
+### 3.2 第二层：训练阶段
+
+```python
+def _add_missing_indicators(df, feats):
+    """为所有特征列添加缺失指示器(1=缺失, 0=非缺失)"""
+    indicator_cols = []
+    # 只为原始特征创建指示器，跳过已经是指示器的列
+    original_feats = [f for f in feats if not f.endswith('_missing')]
+    
+    for col in original_feats:
+        if col not in df.columns:
+            continue
+        indicator_name = f'{col}_missing'
+        df[indicator_name] = df[col].isnull().astype(int)  # 1=缺失, 0=非缺失
+        indicator_cols.append(indicator_name)
+    
+    new_feats = feats + indicator_cols
+    return df, new_feats
+
+# 训练时填充
+df_train, feats = _add_missing_indicators(df_train, feats)
+medians = df_train[feats].median().to_dict()
+X_tr = df_train[feats].fillna(df_train[feats].median())
+X_va = df_valid[feats].fillna(df_valid[feats].median())
+
+# 确保数值类型，再次填充
+for col in X_tr.columns:
+    X_tr[col] = pd.to_numeric(X_tr[col], errors='coerce')
+    X_va[col] = pd.to_numeric(X_va[col], errors='coerce')
+X_tr = X_tr.fillna(0)
+X_va = X_va.fillna(0)
+```
+
+**处理逻辑：**
+- ✅ 为每个特征创建**缺失指示器**（90个原始特征 → 180个特征）
+- ✅ 使用**训练集中位数**填充缺失值
+- ✅ 强制转换为数值类型，剩余NaN填充为0
+- ✅ 缺失指示器让模型知道哪些值是填充的
+
+### 3.3 第三层：预测阶段
+
+```python
+# 使用训练时保存的中位数填充
+fill_medians = model['medians']
+X = X.fillna(fill_medians)
+
+# 确保数值类型
+for col in X.columns:
+    X[col] = pd.to_numeric(X[col], errors='coerce')
+X = X.fillna(0)
+```
+
+**处理逻辑：**
+- ✅ 使用**训练时保存的中位数**（存储在模型meta中）
+- ✅ 保持训练和预测的填充逻辑一致
+- ✅ 强制转换数值类型，剩余NaN填充为0
+
+---
+
+## 四、完整处理流程
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 第一层：特征生成                                              │
+│                                                             │
+│ 1. 盘口特征：                                                │
+│    - 即时盘缺失 → 用初盘填充                                 │
+│    - 部分数据缺失 → 仅计算有数据的部分                        │
+│                                                             │
+│ 2. 大小球特征：                                              │
+│    - 即时盘缺失 → 用初盘填充                                 │
+│    - 赔率缺失 → 不计算隐含概率                               │
+│                                                             │
+│ 3. 欧赔特征：                                                │
+│    - 严格校验：三个赔率都必须存在且 > 1                      │
+│    - 去水归一化计算隐含概率                                  │
+│                                                             │
+│ 4. 交锋/联赛/近期特征：                                      │
+│    - 无数据 → 返回全 None                                    │
+│    - 比分解析失败 → 跳过该场                                 │
+│    - 可选特征（半场/角球）→ 有数据才计算                     │
+│                                                             │
+│ 5. 技术统计特征：                                            │
+│    - 球队无数据 → 用联赛平均值填充                           │
+│    - 应用时间衰减权重（λ=0.08）                              │
+└─────────────────────────────────────────────────────────────┘
+                          ↓
+┌─────────────────────────────────────────────────────────────┐
+│ 第二层：训练阶段                                              │
+│ - 创建缺失指示器（90个 → 180个特征）                          │
+│ - 使用训练集中位数填充所有 None 值                            │
+│ - 强制数值类型转换，剩余 NaN 填充为 0                         │
+└─────────────────────────────────────────────────────────────┘
+                          ↓
+┌─────────────────────────────────────────────────────────────┐
+│ 第三层：预测阶段                                              │
+│ - 使用训练时保存的中位数填充                                  │
+│ - 保持与训练一致的填充逻辑                                    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 五、关键设计原则
+
+### 5.1 保守策略
+- 宁可缺失也不使用不可靠数据
+- 严格校验数据质量（如欧赔三个赔率都必须存在）
+
+### 5.2 分层处理
+- 特征生成 → 缺失指示器 → 中位数填充
+- 每一层都有明确的职责
+
+### 5.3 信息保留
+- 缺失指示器让模型知道哪些值是填充的
+- 避免信息丢失，提高模型鲁棒性
+
+### 5.4 一致性
+- 训练和预测使用相同的填充逻辑
+- 确保模型在生产环境中的表现与训练时一致
+
+### 5.5 时间敏感性
+- 所有近期特征都应用时间衰减
+- 确保模型更关注球队近期状态
+
+---
+
+## 六、特征统计
+
+### 6.1 OVER 模型特征清单（90个）
+
+| 类别 | 数量 | 特征名 |
+|------|------|--------|
+| 亚盘 | 14 | asian_n, ah_init_mean, ah_init_std, ah_init_flat_share, ah_cur_mean, ah_cur_std, ah_cur_flat_share, ah_move, ah_move_up_share, cover_prob_init, aw_init_diff, aw_cur_diff, aw_drift |
+| 大小球 | 8 | ou_n, ou_line_init_mean, ou_line_init_std, ou_line_cur_mean, ou_line_move, over_prob_init, over_prob_cur |
+| 欧赔 | 11 | euro_n, euro_win_prob_init, euro_draw_prob_init, euro_loss_prob_init, euro_win_prob_cur, euro_draw_prob_cur, euro_loss_prob_cur, euro_win_std_init, euro_win_std_cur, euro_return_mean, euro_win_move |
+| 交锋 | 11 | h2h_n, h2h_home_win_rate, h2h_draw_rate, h2h_away_win_rate, h2h_avg_goals, h2h_home_goals_mean, h2h_away_goals_mean, h2h_btts_rate, h2h_over_25_rate, h2h_half_goal_avg, h2h_corners_avg |
+| 近期战绩 | 20 | recent_n, recent_win_rate, recent_draw_rate, recent_goals_for_mean, recent_goals_against_mean, recent_clean_sheet_rate, recent_btts_rate, recent_over_25_rate, recent_unbeaten_rate, h_rf_shots_mean, h_rf_sot_mean, h_rf_corners_mean, h_rf_danger_mean, h_rf_poss_mean, h_rf_fouls_mean, h_rf_yellow_mean, a_rf_shots_mean, a_rf_sot_mean, a_rf_corners_mean, a_rf_danger_mean, a_rf_poss_mean, a_rf_fouls_mean, a_rf_yellow_mean |
+| 联赛统计 | 8 | league_n, league_home_win_rate, league_draw_rate, league_away_win_rate, league_avg_goals, league_btts_rate, league_over_25_rate, league_home_unbeaten_rate, league_goal_strength |
+| 组合特征 | 4 | attack_eff_diff, possession_diff, corners_diff, fouls_diff, yellow_diff, form_momentum_h, form_momentum_a |
+| **总计** | **90** | + 90个缺失指示器 = **180个特征** |
+
+### 6.2 UNDER 模型特征清单
+
+与 OVER 模型相同，共90个原始特征 + 90个缺失指示器 = 180个特征。
+
+---
+
+## 七、版本更新记录
+
+### 2026-11-04
+- ✅ 添加技术统计特征（19个）
+- ✅ 应用时间衰减机制（λ=0.08）
+- ✅ 完善缺失值处理三层机制
+- ✅ 调整比分池：
+  - OVER: 2-1, 1-2, 2-2, 3-1, 3-0, 0-3, 3-2, 1-3, 2-3
+  - UNDER: 1-1, 1-0, 2-1, 0-1, 1-2, 0-0, 2-0, 0-2, 3-0
+- ✅ 调整大小球线过滤：
+  - OVER: 2.5 <= ou_line <= 3.25
+  - UNDER: ou_line <= 2.5
+
+### 2026-11-02
+- ✅ 移除技术统计指标特征（后于11-04恢复）
+
+### 2026-11-01
+- ✅ 初始版本
+
+---
+
+## 八、常见问题
+
+### Q1: 为什么技术统计特征缺失率这么低（0.03%）？
+A: 数据源（team_recent表）覆盖率高，大部分比赛都有完整的技术统计数据。
+
+### Q2: 时间衰减系数λ=0.08是如何选择的？
+A: 通过网格搜索和回测验证，λ=0.08在命中率和稳定性之间取得最佳平衡。
+
+### Q3: 为什么使用联赛平均值填充技术统计缺失值？
+A: 联赛平均值代表该联赛的典型水平，比全局平均值更合理，比中位数更能反映球队实力。
+
+### Q4: 缺失指示器会增加模型复杂度吗？
+A: 是的，特征数从90增加到180。但实验表明，缺失指示器能提供额外信息，提升模型性能（AUC提升约0.004）。
+
+### Q5: 训练和预测的填充逻辑为什么必须一致？
+A: 如果不一致，会导致分布偏移，模型在生产环境中的表现会与训练时不同。
+
+---
+
+## 九、参考资料
+
+- `features_over.py` - OVER模型特征工程
+- `features_under.py` - UNDER模型特征工程
+- `train_over.py` - OVER模型训练脚本
+- `train_under.py` - UNDER模型训练脚本
+- `predict_over.py` - OVER模型预测脚本
+- `predict_under.py` - UNDER模型预测脚本
+
