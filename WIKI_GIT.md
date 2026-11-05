@@ -468,7 +468,7 @@ origin  https://xinlee0606:***@gitee.com/xinlee0606/football.git (push)
 #### 步骤 6：拉取最新代码
 
 ```bash
-git pull origin main --rebase
+git pull gitee main --rebase
 ```
 
 **预期输出**：
