@@ -475,7 +475,7 @@ def main():
     
     # 特征(增量更新模式，只更新盘口数据，大幅提升速度)
     print("\n⏳ 加载特征数据（增量模式）...")
-    df = load_features_incremental(rebuild_base=False)
+    df = load_features_incremental(rebuild_base=True)
 
     # 当日未开赛样本: 无比分(in_pool为空)
     unfinished = df[df['in_pool'].isna()].copy()

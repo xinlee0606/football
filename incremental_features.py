@@ -377,8 +377,62 @@ def build_features_from_cached_data(base_data, odds_data):
         # h2h_p1 = _h2h_initial_handicap_features(home, away, h2h_df)
         # p2_feats = _page_features(mid, page_map)
         
-        # 合并所有特征（不含技术统计、排名、初始盘口、页面盘口）
-        feat_row = {**af, **ouf, **ef, **h2hf, **home_recent, **away_recent, **league_stats}
+        # 添加h_/a_前缀区分主客场近期战绩特征
+        h_recent_prefixed = {f'h_{k}': v for k, v in home_recent.items()}
+        a_recent_prefixed = {f'a_{k}': v for k, v in away_recent.items()}
+        
+        # 计算组合特征（主客队差异）
+        combo = {}
+        # 从team_tech_data直接计算技术指标均值
+        def calc_tech_mean(team_name, stat_key):
+            tech_list = team_tech_data.get(team_name, [])[-10:]
+            if not tech_list:
+                return None
+            vals = [to_float(m.get(stat_key)) for m in tech_list]
+            vals = [v for v in vals if v is not None]
+            return sum(vals) / len(vals) if vals else None
+        
+        h_sot = calc_tech_mean(home, 'shots_on_target')
+        h_shots = calc_tech_mean(home, 'shots')
+        a_sot = calc_tech_mean(away, 'shots_on_target')
+        a_shots = calc_tech_mean(away, 'shots')
+        h_eff = (h_sot / h_shots) if (h_sot is not None and h_shots and h_shots > 0) else None
+        a_eff = (a_sot / a_shots) if (a_sot is not None and a_shots and a_shots > 0) else None
+        if h_eff is not None and a_eff is not None:
+            combo['attack_eff_diff'] = h_eff - a_eff
+        
+        h_poss = calc_tech_mean(home, 'possession')
+        a_poss = calc_tech_mean(away, 'possession')
+        if h_poss is not None and a_poss is not None:
+            combo['possession_diff'] = h_poss - a_poss
+        
+        h_corners = calc_tech_mean(home, 'corners')
+        a_corners = calc_tech_mean(away, 'corners')
+        if h_corners is not None and a_corners is not None:
+            combo['corners_diff'] = h_corners - a_corners
+        
+        h_fouls = calc_tech_mean(home, 'fouls')
+        a_fouls = calc_tech_mean(away, 'fouls')
+        if h_fouls is not None and a_fouls is not None:
+            combo['fouls_diff'] = h_fouls - a_fouls
+        
+        h_yellow = calc_tech_mean(home, 'yellow_cards')
+        a_yellow = calc_tech_mean(away, 'yellow_cards')
+        # 始终添加yellow_diff，即使为None（模型需要这个特征）
+        combo['yellow_diff'] = (h_yellow - a_yellow) if (h_yellow is not None and a_yellow is not None) else None
+        
+        # 状态动量
+        h_win_rate = home_recent.get('recent_win_rate')
+        a_win_rate = away_recent.get('recent_win_rate')
+        league_h_wr = league_stats.get('league_home_win_rate')
+        league_a_wr = league_stats.get('league_away_win_rate')
+        if h_win_rate is not None and league_h_wr is not None:
+            combo['form_momentum_h'] = h_win_rate - league_h_wr
+        if a_win_rate is not None and league_a_wr is not None:
+            combo['form_momentum_a'] = a_win_rate - league_a_wr
+        
+        # 合并所有特征
+        feat_row = {**af, **ouf, **ef, **h2hf, **h_recent_prefixed, **a_recent_prefixed, **league_stats, **combo}
         
         feat_row['is_cup'] = 1 if is_cup_league_over(league) else 0
         
