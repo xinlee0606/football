@@ -762,3 +762,204 @@ git checkout <commit-hash> -- <file>  # 恢复单个文件到指定版本
 3. **服务器同步**：修改代码后务必同步到服务器，避免本地和服务器代码不一致导致的问题
 4. **分支策略**：目前使用单分支 `main`，如需并行开发可创建 feature 分支
 5. **提交信息规范**：使用 `feat:` / `fix:` / `docs:` / `refactor:` 等前缀描述修改类型
+
+---
+
+## 2026-11-06 预测bug修复
+
+### 问题描述
+OVER模型预测报错：
+- 错误信息：`The number of features in data (178) is not the same as it was in training data (180)`
+- 缺少特征：`yellow_diff` 及其缺失指示器 `yellow_diff_missing`
+
+### 根本原因
+1. `incremental_features.py` 中的 combo 特征计算依赖 `home_recent.get('rf_sot_mean')` 等技术统计指标
+2. 但这些指标是从 `_recent_form_features_fast` 函数计算的，该函数需要比赛数据中包含技术统计（shots, corners等）
+3. 缓存的 `home_team_matches` 只包含基础信息（match_id, score, home_team, away_team），没有技术统计
+4. `team_tech_data` 虽然存在，但未被用于计算 combo 特征
+5. `yellow_diff` 因为数据中没有黄牌统计而完全缺失
+
+### 修复方案
+
+#### 1. 修改 `incremental_features.py` - combo 特征计算逻辑
+**修改位置**：第385-430行
+
+**修改前**：
+```python
+combo = {}
+# 进攻效率差
+h_sot = home_recent.get('rf_sot_mean')
+h_shots = home_recent.get('rf_shots_mean')
+# ... 从 home_recent/away_recent 获取技术指标
+```
+
+**修改后**：
+```python
+combo = {}
+# 从team_tech_data直接计算技术指标均值
+def calc_tech_mean(team_name, stat_key):
+    tech_list = team_tech_data.get(team_name, [])[-10:]
+    if not tech_list:
+        return None
+    vals = [to_float(m.get(stat_key)) for m in tech_list]
+    vals = [v for v in vals if v is not None]
+    return sum(vals) / len(vals) if vals else None
+
+h_sot = calc_tech_mean(home, 'shots_on_target')
+h_shots = calc_tech_mean(home, 'shots')
+a_sot = calc_tech_mean(away, 'shots_on_target')
+a_shots = calc_tech_mean(away, 'shots')
+# ... 直接从 team_tech_data 计算
+```
+
+#### 2. 确保 `yellow_diff` 始终存在
+```python
+h_yellow = calc_tech_mean(home, 'yellow_cards')
+a_yellow = calc_tech_mean(away, 'yellow_cards')
+# 始终添加yellow_diff，即使为None（模型需要这个特征）
+combo['yellow_diff'] = (h_yellow - a_yellow) if (h_yellow is not None and a_yellow is not None) else None
+```
+
+### 修复结果
+- ✓ 缓存重建成功：100列（94个特征 + 6个元数据列）
+- ✓ 所有7个 combo 特征都存在
+  - attack_eff_diff: 30693/30693 (100%)
+  - possession_diff: 30693/30693 (100%)
+  - corners_diff: 30693/30693 (100%)
+  - fouls_diff: 29981/30693 (97.7%)
+  - yellow_diff: 0/30693 (0% - 存在但全为None，因为没有黄牌数据)
+  - form_momentum_h: 30691/30693 (99.99%)
+  - form_momentum_a: 30689/30693 (99.99%)
+- ✓ 预测成功运行：31场比赛预测完成
+- ✓ 邮件发送成功：推荐10场
+- ✓ 特征数量匹配：180个特征（90原始 + 90缺失指示器）
+
+### Git 操作步骤
+
+#### 1. 查看修改状态
+```bash
+cd /coding/live
+git status
+```
+
+输出：
+```
+On branch main
+Changes not staged for commit:
+  modified:   incremental_features.py
+  modified:   models/latest.json
+  modified:   predict_over.py
+  modified:   predictions_under.jsonl
+
+Untracked files:
+  models/calib_20261106.joblib
+  models/lgb_goals_away_20261106.txt
+  models/lgb_goals_home_20261106.txt
+  models/lgb_pool_20261106.txt
+  models/meta_20261106.json
+  backtest.py
+  predict_scores.py
+  features.py
+  tech_stats_compare.py
+  add_combo_features.py
+  update_feature_columns.py
+  update_build_merge.py
+  verify_all.py
+  verify_match.py
+  test_league_goal_strength.py
+  run_history.sh
+  baseline_report.json
+```
+
+#### 2. 添加修改文件
+```bash
+# 添加核心修改文件
+git add incremental_features.py predict_over.py models/latest.json predictions_under.jsonl
+
+# 添加新模型文件
+git add models/calib_20261106.joblib \
+      models/lgb_goals_away_20261106.txt \
+      models/lgb_goals_home_20261106.txt \
+      models/lgb_pool_20261106.txt \
+      models/meta_20261106.json
+
+# 添加辅助脚本
+git add backtest.py predict_scores.py features.py tech_stats_compare.py \
+      add_combo_features.py update_feature_columns.py update_build_merge.py \
+      verify_all.py verify_match.py test_league_goal_strength.py \
+      run_history.sh baseline_report.json
+```
+
+#### 3. 提交修改
+```bash
+git commit -m "预测bug修复: 修复OVER模型combo特征计算逻辑，确保180特征完整匹配"
+```
+
+输出：
+```
+[main c67b97b] 预测bug修复: 修复OVER模型combo特征计算逻辑，确保180特征完整匹配
+ 21 files changed, 8418 insertions(+), 4 deletions(-)
+ create mode 100644 add_combo_features.py
+ create mode 100644 backtest.py
+ ...
+```
+
+#### 4. 推送到远程仓库
+```bash
+# 检查远程仓库配置
+git remote -v
+
+# 推送到 origin（已包含凭据）
+git push origin main
+```
+
+输出：
+```
+remote: Powered by GITEE.COM [1.1.23]
+remote: Set trace flag e840b097
+To https://gitee.com/xinlee0606/football.git
+   bb1eccc..c67b97b  main -> main
+```
+
+### 关键文件修改清单
+
+| 文件 | 修改类型 | 说明 |
+|------|----------|------|
+| `incremental_features.py` | 核心修复 | 修改combo特征计算逻辑，从team_tech_data直接计算技术指标均值 |
+| `predict_over.py` | 配置调整 | `load_features_incremental(rebuild_base=True)` |
+| `models/meta_20261106.json` | 新增 | OVER模型元数据（180特征定义） |
+| `models/lgb_pool_20261106.txt` | 新增 | OVER模型LightGBM权重文件 |
+| `models/calib_20261106.joblib` | 新增 | OVER模型校准器 |
+| `predictions_under.jsonl` | 更新 | UNDER模型最新预测结果 |
+
+### 注意事项
+1. **yellow_diff 特征**：当前数据中没有黄牌统计，该特征全为None，但模型需要这个特征位，必须保留
+2. **缓存重建**：修改特征计算逻辑后，需要删除旧缓存并重建
+   ```bash
+   rm -f features_over_cache.csv features_over_base_data.pkl
+   ```
+3. **远程仓库凭据**：origin 已嵌入凭据，gitee 未嵌入，推送到 origin 即可
+4. **特征数量验证**：预测前应验证特征数量是否为180（90原始 + 90缺失指示器）
+
+### 验证命令
+```bash
+# 检查缓存列数
+.venv/bin/python -c "import pandas as pd; df = pd.read_csv('features_over_cache.csv'); print(f'列数: {len(df.columns)}')"
+
+# 运行预测测试
+.venv/bin/python predict_over.py 2>&1 | tail -20
+
+# 检查combo特征完整性
+.venv/bin/python -c "
+import pandas as pd
+df = pd.read_csv('features_over_cache.csv')
+combo_cols = ['attack_eff_diff', 'possession_diff', 'corners_diff', 'fouls_diff', 'yellow_diff', 'form_momentum_h', 'form_momentum_a']
+for c in combo_cols:
+    if c in df.columns:
+        non_null = df[c].notna().sum()
+        print(f'{c}: ✓ 存在, 非空值={non_null}/{len(df)}')
+    else:
+        print(f'{c}: ✗ 不存在')
+"
+```
+
