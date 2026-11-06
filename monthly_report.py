@@ -385,27 +385,29 @@ def analyze_model(records, match_data, pool, pool_name, conf_threshold):
         by_conf[bucket]['hit_pool'] += int(d['hit_pool'])
         by_conf[bucket]['hit_top'] += int(d['hit_top'])
 
-    # 按比赛类型统计(单场/串关 + 杯赛/联赛)
-    by_match_type = defaultdict(lambda: {'total': 0, 'hit_pool': 0, 'hit_top': 0})
+    # 按 SP 值区间统计
+    by_sp = defaultdict(lambda: {'total': 0, 'hit_pool': 0, 'hit_top': 0, 'sp_sum': 0.0})
     for d in details:
-        sm = d.get('single_match', '')
-        lg = d.get('league', '')
-        # 单场/串关
-        if sm and ('单场' in str(sm)):
-            match_type = '单场'
+        sp = d.get('sp')
+        if sp is None:
+            bucket = '无 SP'
+        elif sp < 10:
+            bucket = '<10'
+        elif sp < 15:
+            bucket = '10~15'
+        elif sp < 20:
+            bucket = '15~20'
+        elif sp < 30:
+            bucket = '20~30'
+        elif sp < 50:
+            bucket = '30~50'
         else:
-            match_type = '串关'
-        by_match_type[match_type]['total'] += 1
-        by_match_type[match_type]['hit_pool'] += int(d['hit_pool'])
-        by_match_type[match_type]['hit_top'] += int(d['hit_top'])
-        # 杯赛/联赛(简单规则: 含'杯'/'甲'/'乙'等关键字)
-        if any(k in lg for k in ['杯', '锦标', '决赛']):
-            league_type = '杯赛'
-        else:
-            league_type = '联赛'
-        by_match_type[league_type]['total'] += 1
-        by_match_type[league_type]['hit_pool'] += int(d['hit_pool'])
-        by_match_type[league_type]['hit_top'] += int(d['hit_top'])
+            bucket = '50+'
+        by_sp[bucket]['total'] += 1
+        by_sp[bucket]['hit_pool'] += int(d['hit_pool'])
+        by_sp[bucket]['hit_top'] += int(d['hit_top'])
+        if sp is not None:
+            by_sp[bucket]['sp_sum'] += sp
 
     # 盈亏分析(投注命中时: SP*2*0.65 - 注数, 未中: -注数)
     # 这里按9注计算(OVER/UNDER都是9比分池)
@@ -432,15 +434,100 @@ def analyze_model(records, match_data, pool, pool_name, conf_threshold):
         'by_handicap': dict(by_handicap),
         'by_ou_line': dict(by_ou_line),
         'by_conf': dict(by_conf),
-        'by_match_type': dict(by_match_type),
+        'by_sp': dict(by_sp),
         'profit': profit,
         'profit_count': profit_count,
     }
 
 
+def analyze_period(conn, start_date, end_date):
+    """分析指定时间段内的预测记录(支持多月份聚合)
+    返回: {over_result, under_result} 或 None
+    """
+    over_records = load_predictions(LOCAL_PRED_DIR, OVER_PRED_FILE, start_date, end_date)
+    under_records = load_predictions(LOCAL_PRED_DIR, UNDER_PRED_FILE, start_date, end_date)
+
+    if not over_records and not under_records:
+        return None
+
+    all_ids = set()
+    for rec in over_records + under_records:
+        all_ids.add(rec.get('match_id', ''))
+    all_ids = list(all_ids)
+
+    match_data = query_match_data(conn, all_ids)
+
+    over_result = analyze_model(over_records, match_data, OVER_POOL, 'OVER', OVER_CONF_THRESHOLD)
+    under_result = analyze_model(under_records, match_data, UNDER_POOL, 'UNDER', UNDER_CONF_THRESHOLD)
+
+    return {
+        'over_result': over_result,
+        'under_result': under_result,
+        'over_records': over_records,
+        'under_records': under_records,
+        'match_data': match_data,
+    }
+
+
 # ==================== 报告生成 ====================
-def format_report(over_result, under_result, month_label):
-    """格式化月度分析报告"""
+def format_model_analysis(result, model_label, threshold_pct):
+    """格式化单个模型的分析结果，返回文本行列表"""
+    lines = []
+    lines.append("━" * 70)
+    lines.append(f"【{model_label}】置信度阈值 ≥ {threshold_pct}%")
+    lines.append("━" * 70)
+    if result.get('finished', 0) == 0:
+        lines.append("  本期无推荐记录或均未完场")
+    else:
+        r = result
+        lines.append(f"  推荐场次: {r['total']}  已完场: {r['finished']}")
+        lines.append(f"  池内命中: {r['hit_pool']}/{r['finished']} ({r['rate_pool']*100:.1f}%)")
+        lines.append(f"  投注命中: {r['hit_top']}/{r['finished']} ({r['rate_top']*100:.1f}%)")
+        if r.get('profit_count', 0) > 0:
+            lines.append(f"  盈亏统计: {r['profit']:+.1f} 元 / {r['profit_count']}场 (9注/场)")
+            roi = r['profit'] / (r['profit_count'] * 9) * 100
+            lines.append(f"  ROI: {roi:+.1f}%")
+        lines.append('')
+        lines.append("  ▸ 置信度区间分析:")
+        for bucket in ['55%-60%', '60%-70%', '70%-80%', '80%-90%', '90%+']:
+            d = r['by_conf'].get(bucket)
+            if d and d['total'] > 0:
+                rate = d['hit_pool'] / d['total'] * 100
+                lines.append(f"    {bucket:>10}: {d['hit_pool']}/{d['total']} ({rate:.1f}%)  投注{d['hit_top']}中")
+        lines.append('')
+        lines.append("  ▸ 联赛分析(按推荐场次降序, Top 10):")
+        for lg, d in sorted(r['by_league'].items(), key=lambda x: -x[1]['total'])[:10]:
+            rate = d['hit_pool'] / d['total'] * 100 if d['total'] else 0
+            lines.append(f"    {lg:<12}: {d['hit_pool']}/{d['total']} ({rate:.1f}%)  投注{d['hit_top']}中")
+        lines.append('')
+        lines.append("  ▸ SP 值分析:")
+        for bucket in ['<10', '10~15', '15~20', '20~30', '30~50', '50+', '无 SP']:
+            d = r['by_sp'].get(bucket)
+            if d and d['total'] > 0:
+                rate = d['hit_pool'] / d['total'] * 100
+                avg_sp = d['sp_sum'] / d['total'] if d['total'] else 0
+                lines.append(f"    {bucket:>6}: {d['hit_pool']}/{d['total']} ({rate:.1f}%)  投注{d['hit_top']}中  平均 SP{avg_sp:.1f}")
+        lines.append('')
+        lines.append("  ▸ 盘口分析:")
+        for bucket in ['受让1.5+', '受让0.75~1.5', '受让0.25~0.75', '平手',
+                        '让0.25', '让0.5~0.75', '让1~1.5', '让1.75+', '未知']:
+            d = r['by_handicap'].get(bucket)
+            if d and d['total'] > 0:
+                rate = d['hit_pool'] / d['total'] * 100
+                lines.append(f"    {bucket:>14}: {d['hit_pool']}/{d['total']} ({rate:.1f}%)  投注{d['hit_top']}中")
+        lines.append('')
+        lines.append("  ▸ 大小球线分析:")
+        for bucket in ['<2.0', '2.0~2.25', '2.5~2.75', '3.0~3.25', '3.5+', '未知']:
+            d = r['by_ou_line'].get(bucket)
+            if d and d['total'] > 0:
+                rate = d['hit_pool'] / d['total'] * 100
+                lines.append(f"    {bucket:>10}: {d['hit_pool']}/{d['total']} ({rate:.1f}%)  投注{d['hit_top']}中")
+    lines.append('')
+    return lines
+
+
+def format_report(over_result, under_result, month_label, over_3m=None, under_3m=None):
+    """格式化月度分析报告(含近3个月趋势)"""
     lines = []
 
     def out(s=''):
@@ -452,9 +539,9 @@ def format_report(over_result, under_result, month_label):
     out("=" * 70)
     out()
 
-    # ---------- OVER 模型 ----------
+    # ---------- 当月 OVER 模型 ----------
     out("━" * 70)
-    out("【一、OVER 模型】置信度阈值 ≥ 55%")
+    out("【一、OVER 模型 · 当月】")
     out("━" * 70)
     if over_result.get('finished', 0) == 0:
         out("  本月无OVER模型推荐记录或均未完场")
@@ -468,60 +555,45 @@ def format_report(over_result, under_result, month_label):
             roi = r['profit'] / (r['profit_count'] * 9) * 100
             out(f"  ROI: {roi:+.1f}%")
         out()
-
-        # 按置信度区间
         out("  ▸ 置信度区间分析:")
-        conf_order = ['55%-60%', '60%-70%', '70%-80%', '80%-90%', '90%+']
-        for bucket in conf_order:
+        for bucket in ['55%-60%', '60%-70%', '70%-80%', '80%-90%', '90%+']:
             d = r['by_conf'].get(bucket)
             if d and d['total'] > 0:
                 rate = d['hit_pool'] / d['total'] * 100
                 out(f"    {bucket:>10}: {d['hit_pool']}/{d['total']} ({rate:.1f}%)  投注{d['hit_top']}中")
         out()
-
-        # 按联赛(Top 10)
         out("  ▸ 联赛分析(按推荐场次降序, Top 10):")
-        lg_sorted = sorted(r['by_league'].items(), key=lambda x: -x[1]['total'])[:10]
-        for lg, d in lg_sorted:
+        for lg, d in sorted(r['by_league'].items(), key=lambda x: -x[1]['total'])[:10]:
             rate = d['hit_pool'] / d['total'] * 100 if d['total'] else 0
             out(f"    {lg:<12}: {d['hit_pool']}/{d['total']} ({rate:.1f}%)  投注{d['hit_top']}中")
         out()
-
-        # 按比赛类型
-        out("  ▸ 比赛类型分析:")
-        mt_order = ['单场', '串关', '联赛', '杯赛']
-        for mt in mt_order:
-            d = r['by_match_type'].get(mt)
+        out("  ▸ SP 值分析:")
+        for bucket in ['<10', '10~15', '15~20', '20~30', '30~50', '50+', '无 SP']:
+            d = r['by_sp'].get(bucket)
             if d and d['total'] > 0:
                 rate = d['hit_pool'] / d['total'] * 100
-                out(f"    {mt:>6}: {d['hit_pool']}/{d['total']} ({rate:.1f}%)  投注{d['hit_top']}中")
+                avg_sp = d['sp_sum'] / d['total'] if d['total'] else 0
+                out(f"    {bucket:>6}: {d['hit_pool']}/{d['total']} ({rate:.1f}%)  投注{d['hit_top']}中  平均 SP{avg_sp:.1f}")
         out()
-
-        # 按盘口
         out("  ▸ 盘口分析:")
-        hc_order = ['受让1.5+', '受让0.75~1.5', '受让0.25~0.75', '平手',
-                    '让0.25', '让0.5~0.75', '让1~1.5', '让1.75+', '未知']
-        for bucket in hc_order:
+        for bucket in ['受让1.5+', '受让0.75~1.5', '受让0.25~0.75', '平手',
+                        '让0.25', '让0.5~0.75', '让1~1.5', '让1.75+', '未知']:
             d = r['by_handicap'].get(bucket)
             if d and d['total'] > 0:
                 rate = d['hit_pool'] / d['total'] * 100
                 out(f"    {bucket:>14}: {d['hit_pool']}/{d['total']} ({rate:.1f}%)  投注{d['hit_top']}中")
         out()
-
-        # 按大小球线
         out("  ▸ 大小球线分析:")
-        ou_order = ['<2.0', '2.0~2.25', '2.5~2.75', '3.0~3.25', '3.5+', '未知']
-        for bucket in ou_order:
+        for bucket in ['<2.0', '2.0~2.25', '2.5~2.75', '3.0~3.25', '3.5+', '未知']:
             d = r['by_ou_line'].get(bucket)
             if d and d['total'] > 0:
                 rate = d['hit_pool'] / d['total'] * 100
                 out(f"    {bucket:>10}: {d['hit_pool']}/{d['total']} ({rate:.1f}%)  投注{d['hit_top']}中")
-
     out()
 
-    # ---------- UNDER 模型 ----------
+    # ---------- 当月 UNDER 模型 ----------
     out("━" * 70)
-    out("【二、UNDER 模型】置信度阈值 ≥ 90%")
+    out("【二、UNDER 模型 · 当月】")
     out("━" * 70)
     if under_result.get('finished', 0) == 0:
         out("  本月无UNDER模型推荐记录或均未完场")
@@ -535,60 +607,60 @@ def format_report(over_result, under_result, month_label):
             roi = r['profit'] / (r['profit_count'] * 9) * 100
             out(f"  ROI: {roi:+.1f}%")
         out()
-
-        # 按置信度区间
         out("  ▸ 置信度区间分析:")
-        conf_order = ['55%-60%', '60%-70%', '70%-80%', '80%-90%', '90%+']
-        for bucket in conf_order:
+        for bucket in ['55%-60%', '60%-70%', '70%-80%', '80%-90%', '90%+']:
             d = r['by_conf'].get(bucket)
             if d and d['total'] > 0:
                 rate = d['hit_pool'] / d['total'] * 100
                 out(f"    {bucket:>10}: {d['hit_pool']}/{d['total']} ({rate:.1f}%)  投注{d['hit_top']}中")
         out()
-
-        # 按联赛(Top 10)
         out("  ▸ 联赛分析(按推荐场次降序, Top 10):")
-        lg_sorted = sorted(r['by_league'].items(), key=lambda x: -x[1]['total'])[:10]
-        for lg, d in lg_sorted:
+        for lg, d in sorted(r['by_league'].items(), key=lambda x: -x[1]['total'])[:10]:
             rate = d['hit_pool'] / d['total'] * 100 if d['total'] else 0
             out(f"    {lg:<12}: {d['hit_pool']}/{d['total']} ({rate:.1f}%)  投注{d['hit_top']}中")
         out()
-
-        # 按比赛类型
-        out("  ▸ 比赛类型分析:")
-        mt_order = ['单场', '串关', '联赛', '杯赛']
-        for mt in mt_order:
-            d = r['by_match_type'].get(mt)
+        out("  ▸ SP 值分析:")
+        for bucket in ['<10', '10~15', '15~20', '20~30', '30~50', '50+', '无 SP']:
+            d = r['by_sp'].get(bucket)
             if d and d['total'] > 0:
                 rate = d['hit_pool'] / d['total'] * 100
-                out(f"    {mt:>6}: {d['hit_pool']}/{d['total']} ({rate:.1f}%)  投注{d['hit_top']}中")
+                avg_sp = d['sp_sum'] / d['total'] if d['total'] else 0
+                out(f"    {bucket:>6}: {d['hit_pool']}/{d['total']} ({rate:.1f}%)  投注{d['hit_top']}中  平均 SP{avg_sp:.1f}")
         out()
-
-        # 按盘口
         out("  ▸ 盘口分析:")
-        hc_order = ['受让1.5+', '受让0.75~1.5', '受让0.25~0.75', '平手',
-                    '让0.25', '让0.5~0.75', '让1~1.5', '让1.75+', '未知']
-        for bucket in hc_order:
+        for bucket in ['受让1.5+', '受让0.75~1.5', '受让0.25~0.75', '平手',
+                        '让0.25', '让0.5~0.75', '让1~1.5', '让1.75+', '未知']:
             d = r['by_handicap'].get(bucket)
             if d and d['total'] > 0:
                 rate = d['hit_pool'] / d['total'] * 100
                 out(f"    {bucket:>14}: {d['hit_pool']}/{d['total']} ({rate:.1f}%)  投注{d['hit_top']}中")
         out()
-
-        # 按大小球线
         out("  ▸ 大小球线分析:")
-        ou_order = ['<2.0', '2.0~2.25', '2.5~2.75', '3.0~3.25', '3.5+', '未知']
-        for bucket in ou_order:
+        for bucket in ['<2.0', '2.0~2.25', '2.5~2.75', '3.0~3.25', '3.5+', '未知']:
             d = r['by_ou_line'].get(bucket)
             if d and d['total'] > 0:
                 rate = d['hit_pool'] / d['total'] * 100
                 out(f"    {bucket:>10}: {d['hit_pool']}/{d['total']} ({rate:.1f}%)  投注{d['hit_top']}中")
+    out()
 
+    # ---------- 近3个月趋势分析 ----------
+    out("━" * 70)
+    out("【三、近3个月趋势分析】")
+    out("━" * 70)
+    has_3m = False
+    if over_3m and over_3m.get('finished', 0) > 0:
+        lines.extend(format_model_analysis(over_3m, 'OVER(近3个月)', 55))
+        has_3m = True
+    if under_3m and under_3m.get('finished', 0) > 0:
+        lines.extend(format_model_analysis(under_3m, 'UNDER(近3个月)', 90))
+        has_3m = True
+    if not has_3m:
+        out("  近3个月无有效分析数据")
     out()
 
     # ---------- 综合总结 ----------
     out("━" * 70)
-    out("【三、综合总结】")
+    out("【四、综合总结】")
     out("━" * 70)
 
     total_profit = 0.0
@@ -650,7 +722,7 @@ def send_email(subject, content):
 
 # ==================== 主流程 ====================
 def main():
-    ap = argparse.ArgumentParser(description='月度预测命中率分析报告')
+    ap = argparse.ArgumentParser(description='月度预测命中率分析报告(含近3个月趋势)')
     ap.add_argument('--month', default=None, metavar='YYYYMM',
                     help='分析指定月份(默认上月)')
     ap.add_argument('--local', action='store_true',
@@ -666,18 +738,14 @@ def main():
     print(f"分析月份: {month_label} ({start_date} ~ {end_date})")
 
     # 确定预测文件目录
-    if args.local:
-        pred_dir = LOCAL_PRED_DIR
-    else:
-        # 尝试从服务器获取(通过SSH下载)
-        pred_dir = LOCAL_PRED_DIR
+    pred_dir = LOCAL_PRED_DIR
+    if not args.local:
         try:
             import paramiko
             ssh = paramiko.SSHClient()
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             ssh.connect('8.130.188.90', username='root', password='Xin7231013@@@')
             sftp = ssh.open_sftp()
-
             for fname in [OVER_PRED_FILE, UNDER_PRED_FILE]:
                 remote_path = f"{SERVER_PRED_DIR}/{fname}"
                 local_path = os.path.join(pred_dir, fname)
@@ -686,7 +754,6 @@ def main():
                     print(f"  ✓ 下载 {fname}")
                 except FileNotFoundError:
                     print(f"  ⚠ {fname} 服务器上不存在")
-
             sftp.close()
             ssh.close()
         except ImportError:
@@ -694,7 +761,7 @@ def main():
         except Exception as e:
             print(f"⚠ SSH连接失败({e}), 使用本地文件")
 
-    # 加载预测记录
+    # 加载当月预测记录
     print(f"\n加载预测记录...")
     over_records = load_predictions(pred_dir, OVER_PRED_FILE, start_date, end_date)
     under_records = load_predictions(pred_dir, UNDER_PRED_FILE, start_date, end_date)
@@ -708,20 +775,18 @@ def main():
                        f'{month_label}无OVER/UNDER模型预测记录')
         return
 
-    # 收集所有 match_id
+    # 收集当月 match_id 并查询数据库
     all_ids = set()
     for rec in over_records + under_records:
         all_ids.add(rec.get('match_id', ''))
     all_ids = list(all_ids)
 
-    # 查询数据库获取比赛详情
     print(f"\n查询数据库({len(all_ids)}场比赛)...")
     conn = pymysql.connect(**DB_CONFIG)
     match_data = query_match_data(conn, all_ids)
-    conn.close()
     print(f"  ✓ 获取到 {len(match_data)} 场比赛数据")
 
-    # 分析 OVER 模型
+    # 分析当月
     print(f"\n分析 OVER 模型(置信度 ≥ {OVER_CONF_THRESHOLD*100:.0f}%)...")
     over_result = analyze_model(over_records, match_data, OVER_POOL,
                                 'OVER', OVER_CONF_THRESHOLD)
@@ -729,7 +794,6 @@ def main():
           f"完场 {over_result.get('finished', 0)} 场, "
           f"池内命中 {over_result.get('hit_pool', 0)} 场")
 
-    # 分析 UNDER 模型
     print(f"\n分析 UNDER 模型(置信度 ≥ {UNDER_CONF_THRESHOLD*100:.0f}%)...")
     under_result = analyze_model(under_records, match_data, UNDER_POOL,
                                  'UNDER', UNDER_CONF_THRESHOLD)
@@ -737,8 +801,29 @@ def main():
           f"完场 {under_result.get('finished', 0)} 场, "
           f"池内命中 {under_result.get('hit_pool', 0)} 场")
 
-    # 生成报告
-    report = format_report(over_result, under_result, month_label)
+    # 分析近3个月趋势
+    target_year = int(start_date[:4])
+    target_month = int(start_date[4:6])
+    m2_year = target_year
+    m2_month = target_month - 2
+    if m2_month <= 0:
+        m2_month += 12
+        m2_year -= 1
+    m3_start_str = f"{m2_year}{m2_month:02d}01"
+    print(f"\n分析近3个月趋势({m3_start_str} ~ {end_date})...")
+    period_data = analyze_period(conn, m3_start_str, end_date)
+    over_3m = period_data['over_result'] if period_data else None
+    under_3m = period_data['under_result'] if period_data else None
+    if period_data:
+        print(f"  OVER(3月): 推荐{over_3m.get('total', 0)}场, 完场{over_3m.get('finished', 0)}场")
+        print(f"  UNDER(3月): 推荐{under_3m.get('total', 0)}场, 完场{under_3m.get('finished', 0)}场")
+    else:
+        print("  近3个月无预测数据")
+    conn.close()
+
+    # 生成报告(单月 + 近3个月)
+    report = format_report(over_result, under_result, month_label,
+                           over_3m=over_3m, under_3m=under_3m)
     print("\n" + report)
 
     # 保存报告到文件
@@ -751,7 +836,6 @@ def main():
 
     # 发送邮件
     if not args.skip_email:
-        # 邮件标题包含关键数据
         parts = []
         if over_result.get('finished', 0) > 0:
             parts.append(f"OVER {over_result['rate_pool']*100:.0f}%")
@@ -760,14 +844,6 @@ def main():
         summary = ' / '.join(parts) if parts else '空仓'
         subject = f"月度报告 {month_label} {summary}"
         send_email(subject, report)
-
-    # 清理下载的临时文件
-    if not args.local:
-        for fname in [OVER_PRED_FILE]:
-            fpath = os.path.join(pred_dir, fname)
-            if os.path.exists(fpath) and fname == OVER_PRED_FILE:
-                # OVER 文件本地可能本来就没有，清理下载的
-                pass
 
 
 if __name__ == '__main__':
