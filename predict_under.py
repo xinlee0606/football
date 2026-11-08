@@ -48,6 +48,7 @@ BLACKLIST_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 # ==================== 投注纪律配置 ====================
 MIN_POOL_PROB_FALLBACK = 0.60
 MONITOR_N = 100
+MONITOR_BASELINE = 0.75
 MONITOR_DROP_RATIO = 0.85
 
 
@@ -194,8 +195,8 @@ def monitor(conn):
         return
     recent = judged[-MONITOR_N:]
     hit_rate = sum(j['hit'] for j in recent) / len(recent)
-    # 基线: 从回测结果或固定值
-    baseline = 0.55
+    # 基线: 持续学习监控阈值
+    baseline = MONITOR_BASELINE
     print(f"\n持续学习监控: 近{len(recent)}场已完场推荐池内命中率 "
           f"{hit_rate * 100:.1f}% (基线{baseline * 100:.1f}%)")
     if hit_rate < baseline * MONITOR_DROP_RATIO:
