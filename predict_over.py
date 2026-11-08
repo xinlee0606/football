@@ -46,6 +46,7 @@ BLACKLIST_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 MIN_POOL_PROB_FALLBACK = 0.50   # 模型未提供阈值时的兜底阈值
 MAX_POOL_PROB_THRESHOLD = 0.50  # 阈值上限 (2026-11-01 修改，降低阈值以增加推荐场次)
 MONITOR_N = 100             # 监控滚动窗口场次
+MONITOR_BASELINE = 0.50     # 监控基线(回测基线不可用时兜底)
 MONITOR_DROP_RATIO = 0.85   # 命中率跌破 基线*该比例 触发告警
 
 
@@ -200,7 +201,7 @@ def monitor(conn):
         return
     recent = judged[-MONITOR_N:]
     hit_rate = sum(j['hit'] for j in recent) / len(recent)
-    baseline = load_baseline() or 0.55
+    baseline = load_baseline() or MONITOR_BASELINE
     print(f"\n持续学习监控: 近{len(recent)}场已完场推荐池内命中率 "
           f"{hit_rate * 100:.1f}% (基线{baseline * 100:.1f}%)")
     if hit_rate < baseline * MONITOR_DROP_RATIO:
