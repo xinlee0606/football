@@ -20,9 +20,13 @@
 
 ## 9池模型专属特征工程（features_under.py）
 
-### 72 个特征清单（无未来函数）
+### 104 个特征清单（无未来函数）
 
-#### ① 亚盘（14个） — `asian_features_upside()`
+> 以生产模型 `models/meta_under_20261118.json` 的 `features_upside` 为准实测：**104 个原始特征** = 13亚盘 + 7大小球 + 11欧赔 + 11交锋 + 32近期战绩 + 9联赛统计 + 7组合 + 14赛程密度。
+> 训练时每个原始特征再配一个 `*_missing` 缺失指示器，实际入模 **208 列**。旧文档写的「72 个（14+8+11+11+20+8）」是 2026-10-25 口径，已不符；其中 `cover_prob_cur`、`exp_total`、`recent_loss_rate` 三个特征在 `features_under.py` 中并不存在。
+> 去掉 2026-11-18 新增的 14 个赛程密度特征即为 **90**（A/B 的对照组，`UNDER_USE_FIXTURE_DENSITY=0`）。
+
+#### ① 亚盘（13个） — `asian_features_upside()`
 | 特征 | 含义 |
 |------|------|
 | `asian_n` | 机构数 |
@@ -35,12 +39,11 @@
 | `ah_move` | 盘口升降（终盘均值 − 初盘均值） |
 | `ah_move_up_share` | 升盘机构占比 |
 | `cover_prob_init` | 初盘让球覆盖隐含概率（客水/(主水+客水) 去水归一） |
-| `cover_prob_cur` | 终盘让球覆盖隐含概率 |
 | `aw_init_diff` | 初盘主客水位差（主水均值 − 客水均值） |
 | `aw_cur_diff` | 终盘主客水位差 |
 | `aw_drift` | 水位漂移（终盘水位差 − 初盘水位差） |
 
-#### ② 大小球（8个） — `over_under_features_upside()`
+#### ② 大小球（7个） — `over_under_features_upside()`
 | 特征 | 含义 |
 |------|------|
 | `ou_n` | 机构数 |
@@ -50,7 +53,6 @@
 | `ou_line_move` | 大小球线变化（终盘 − 初盘） |
 | `over_prob_init` | 初盘大球隐含概率（小水/(大水+小水) 去水归一） |
 | `over_prob_cur` | 终盘大球隐含概率 |
-| `exp_total` | 期望总进球（终盘大小球线，缺失则用初盘） |
 
 #### ③ 欧赔（11个） — `euro_features_upside()`
 | 特征 | 含义 |
@@ -74,12 +76,14 @@
 | `h2h_half_goal_avg` | 往绩场均半场进球（half_score 覆盖率100%） |
 | `h2h_corners_avg` | 往绩场均总角球（corners 覆盖率91%） |
 
-#### ⑤ 近10场战绩（20个） — `_recent_form_features_upside_fast()`
-主队10个（`recent_` 前缀）: `recent_n`（场数）、`recent_win_rate`（胜率）、`recent_draw_rate`（平率）、`recent_loss_rate`（负率）、`recent_goals_for_mean`（场均进球）、`recent_goals_against_mean`（场均失球）、`recent_clean_sheet_rate`（零封率）、`recent_btts_rate`（双方进球率）、`recent_over_25_rate`（大于2.5球率）、`recent_unbeaten_rate`（不败率）
+#### ⑤ 近10场战绩（32个 = 主16 + 客16） — `_recent_form_features_upside_fast()`
+主队16个（`h_` 前缀）：
+- 战绩 9 个：`h_recent_n`（场数）、`h_recent_win_rate`（胜率）、`h_recent_draw_rate`（平率）、`h_recent_goals_for_mean`（场均进球）、`h_recent_goals_against_mean`（场均失球）、`h_recent_clean_sheet_rate`（零封率）、`h_recent_btts_rate`（双方进球率）、`h_recent_over_25_rate`（大于2.5球率）、`h_recent_unbeaten_rate`（不败率）
+- 技术统计 7 个：`h_rf_shots_mean`（射门）、`h_rf_sot_mean`（射正）、`h_rf_corners_mean`（角球）、`h_rf_danger_mean`（危险进攻）、`h_rf_poss_mean`（控球率）、`h_rf_fouls_mean`（犯规）、`h_rf_yellow_mean`（黄牌）
 
-客队10个：同上（通过 `is_home=False` 参数获取）
+客队16个：同上，`a_` 前缀（通过 `is_home=False` 参数获取）。均按 `TIME_DECAY_LAMBDA=0.08` 时间衰减加权。
 
-#### ⑥ 联赛统计（8个） — `_league_stats_features_upside_fast()`
+#### ⑥ 联赛统计（9个） — `_league_stats_features_upside_fast()`
 | 特征 | 含义 |
 |------|------|
 | `league_n` | 联赛场数 |
@@ -88,6 +92,21 @@
 | `league_btts_rate` | 联赛双方进球率 |
 | `league_over_25_rate` | 联赛大于2.5球率 |
 | `league_home_unbeaten_rate` | 联赛主队不败率 |
+| `league_goal_strength` | 联赛进球强度 |
+
+#### ⑦ 赛程密度（14个） — `_fixture_density_features()`（2026-11-18 新增）
+低比分池成因之一是「赛程密集 → 疲劳 → 进攻效率下降」，原 90 特征里没有任何时间间隔维度，故补这一向。
+
+| 特征（`h_` / `a_` 各 6 个 + 2 个差值） | 含义 |
+|------|------|
+| `rest_days` | 距上一场已完场的天数 |
+| `matches_last_7d` / `matches_last_14d` / `matches_last_30d` | 近 7/14/30 天比赛场次（负荷） |
+| `avg_rest_days_last5` | 最近 5 场的平均休息天数 |
+| `is_short_rest` | 休息 ≤ 3 天的 0/1 标记 |
+| `rest_days_diff` | 主队 rest_days − 客队 rest_days（正=主队休息更充分） |
+| `fixture_load_diff` | 主队近 7 天场次 − 客队近 7 天场次 |
+
+实现要点：日期取 `match_id` 前 8 位（期号 `YYYYMMDD`），**不能用 `match.match_time`**（该列 `varchar(50)` 实际只存 `'08:30'` 这类时刻）；用 `bisect` 严格截断到本场日期之前，无未来函数；覆盖率 95.9%~97.9%。A/B 结论见 `AB_FIXTURE_DENSITY_202611.md`。
 
 ### 特征提取流程
 
@@ -111,6 +130,10 @@
 - `train_models()` 入口护栏：特征混入标签列直接 `ValueError` 拒绝训练
 - 联赛先验按 match_id 升序累积计算（不使用未来数据）
 - 缓存到 `features_under_cache.csv`，修改比分池/特征/标签后需删除缓存强制重建
+- **历史类特征按当前比赛日期严格截断**（2026-11-18）：近期战绩/联赛统计/历史交锋统一走 `_history_before(...)`，取「日期序数 < 本场」的场次，再按 `RECENT_FORM_WINDOW=10` 取最近 N 场（联赛统计不限场数）。此前是按列表末尾取 `[-10:]`，等于用建表时刻的最后 N 场（含未来场次和本场自身），属未来函数
+- **`load_cache_under()` 必须 `dtype={'match_id': str}`**：期号有 10 位和 11 位两种长度，被推断成 `int64` 后数值排序会打乱时间序，walk-forward 会用到未来场次
+
+> 两个坑的完整成因、自查代码与影响面见 `WIKI_PITFALLS.md`。
 
 ---
 
@@ -348,7 +371,8 @@ A: 1) 运行 `backtest_under.py` 确认 AUC 和命中率；2) 检查特征是否
 | 9p_v6 | 2026-10-13 | h2h 往绩特征+2：新增 `h2h_half_goal_avg`（场均半场进球,覆盖率100%）+`h2h_corners_avg`（场均角球,覆盖率91%）；数据源从 match 表切换到 head_to_head 表。特征 49→51。重训 tag=20261013：验收命中 82.7%（阈值0.80），滚动回测命中 82.3%/ROI +11.7% |
 | 9p_v7 | 2026-10-13 | 新增 `european_odds` 表 + `scrape_euro_odds.py` 欧赔数据补录脚本（数据源 `1x2d.titan007.com/{id}.js`，每场~130家公司胜平负初盘+即时赔率）；后台全量补录中 |
 | 9p_v8 | 2026-10-14 | 欧赔特征集成：新增 `euro_features()` 函数（11个特征：公司数、初/即时隐含胜平负概率、公司间分歧度、返还率、主胜概率变动），数据从 `european_odds` 表批量加载。特征 51→62。三模型全部重训 tag=20261014 |
-| 9p_v9 | 2026-10-25 | 特征工程重构：移除 P0/P1/P2 特征和技术统计特征（覆盖率不足），特征稳定在 72 个（14亚盘+8大小球+11欧赔+11交锋+20近期战绩+8联赛统计）。UNDER 模型特征函数仍使用 `_upside` 后缀（`asian_features_upside` 等）。重训 tag=20261025 |
+| 9p_v9 | 2026-10-25 | 特征工程重构：移除 P0/P1/P2 特征和技术统计特征（覆盖率不足），特征稳定在 72 个（14亚盘+8大小球+11欧赔+11交锋+20近期战绩+8联赛统计）。UNDER 模型特征函数仍使用 `_upside` 后缀（`asian_features_upside` 等）。重训 tag=20261025｜已过期：实际现存 104 特征，口径见 9p_v10 |
+| 9p_v10 | 2026-11-18 | 新增 14 个赛程密度特征（`_fixture_density_features`，90→104）；同步修复两处导致离线指标虚高的既有缺陷：坑1 `load_cache_under/over` 未按字符串读 `match_id`（回测窗口由 23 个散乱修正为 9 个连续）、坑2 近期战绩/联赛统计/历史交锋三处按列表末尾取值（未来函数）。修复后诚实基线：Brier 0.1812→0.1946、Top3 37.3%→34.9%。A/B 采纳新特征（验收段筛选贡献 −0.22pp→+1.06pp）。重训 tag=20261118，详见 `AB_FIXTURE_DENSITY_202611.md` + `WIKI_PITFALLS.md` |
 
 ---
 
@@ -864,7 +888,8 @@ X = X.fillna(0)
 
 ### 6.2 UNDER 模型特征清单
 
-与 OVER 模型相同，共90个原始特征 + 90个缺失指示器 = 180个特征。
+实测 104 个原始特征（13亚盘+7大小球+11欧赔+11交锋+32近期战绩+9联赛统计+7组合+14赛程密度）+ 104 个缺失指示器 = **208 列**。
+与 OVER 不同处：UNDER 多出 14 个赛程密度特征，OVER 仍为 90 原始 + 90 指示器 = 180 列。
 
 ---
 
