@@ -1330,9 +1330,12 @@ def feature_columns_over():
 
 
 def load_cache_over():
-    """加载OVER模型特征缓存, 不存在返回None"""
+    """加载OVER模型特征缓存, 不存在返回None
+    match_id 必须按字符串读: 期号有10位(当日序号<100)和11位(>=100)两种长度,
+    默认推断成 int64 后数值排序会把所有11位id甩到末尾, 打乱时间序,
+    导致按 match_id 切分/取历史集的 walk-forward 用到未来场次"""
     if os.path.exists(CACHE_FILE_OVER):
-        return pd.read_csv(CACHE_FILE_OVER)
+        return pd.read_csv(CACHE_FILE_OVER, dtype={'match_id': str})
     return None
 
 

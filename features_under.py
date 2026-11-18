@@ -13,9 +13,11 @@
 #   from features_under import build_features_under, load_cache_under
 #   df = build_features_under(conn)     # 返回含 in_pool 标签的特征表
 #   save_cache_under(df)                # 缓存到 features_under_cache.csv
+import bisect
 import os
 import re
 from collections import Counter, defaultdict
+from datetime import datetime
 from multiprocessing import Pool, cpu_count
 
 import pandas as pd
@@ -45,6 +47,25 @@ MAX_OU_LINE_UNDER = 2.5          # 大小球线上限(UNDER模型只预测2.5球
 
 # Time decay parameter for recent form weighting
 TIME_DECAY_LAMBDA = 0.08  # Exponential decay rate: w_i = exp(-lambda * (n-1-i))
+
+# ==================== 赛程密度特征配置 ====================
+# 2026-11-18 新增: 休息天数/近期比赛密度。因果链 = 赛程密集 -> 疲劳 -> 进攻效率下降 -> 低比分,
+# 与 UNDER 低分池目标直接契合, 且现有近期战绩特征只有聚合统计、完全没有时间间隔维度。
+# 比赛日期取自 match_id 前8位(YYYYMMDD期号): match.match_time 是 varchar 仅存'08:30'这类时刻,
+# 不含日期, 无法用于计算间隔。
+FIXTURE_WINDOW_DAYS = (7, 14, 30)   # 近期比赛场次统计窗口(天)
+FIXTURE_SHORT_REST_DAYS = 3         # 短休判定阈值: 休息<=3天视为密集
+# 赛程密度特征键(不带 h_/a_ 前缀), 主客各一份
+FD_KEYS_UNDER = ['rest_days', 'matches_last_7d', 'matches_last_14d',
+                 'matches_last_30d', 'avg_rest_days_last5', 'is_short_rest']
+# A/B 对比开关: 环境变量 UNDER_USE_FIXTURE_DENSITY=0 可关闭新特征(结果与旧模型一致)
+USE_FIXTURE_DENSITY = os.environ.get('UNDER_USE_FIXTURE_DENSITY', '1') != '0'
+
+# ==================== 历史窗口截断配置 ====================
+# 2026-11-18 修复: 近期战绩/联赛统计/历史交锋三处特征原先按"索引列表末尾"取值,
+# 相当于用建表时刻的最后N场(含未来场次, 且包含本场自身), 属未来函数且与线上预测口径不一致
+# (线上本场未完场, 列表末尾N场恰好就是真实最近N场)。现统一按当前比赛日期严格截断。
+RECENT_FORM_WINDOW = 10   # 近期战绩/历史交锋各取截断后的最近N场
 
 
 def is_target_handicap_under(ah_cur_mean, ah_init_mean=None):
@@ -582,6 +603,62 @@ def _recent_form_features_upside_fast(team_name, team_data, is_home=True, league
     return feats
 
 
+def _match_id_to_ord(mid):
+    """match_id 前8位(YYYYMMDD期号) -> 日期序数(天), 解析失败返回 None
+    match.match_time 仅存'08:30'这类时刻无日期, 所以用期号日期定序"""
+    s = str(mid)
+    if len(s) < 8 or not s[:8].isdigit():
+        return None
+    try:
+        return datetime.strptime(s[:8], '%Y%m%d').toordinal()
+    except ValueError:
+        return None
+
+
+def _history_before(data_list, ord_list, cur_ord, tail_n=None):
+    """从按日期升序的历史索引中, 取严格早于当前比赛日期的场次
+    data_list/ord_list 必须索引逐条对齐; tail_n 不为空时再取其中最近 tail_n 场
+    cur_ord 解析不出来时返回空列表 —— 宁缺勿漏, 不能退化成"全部历史"带未来场次"""
+    if cur_ord is None or not ord_list:
+        return []
+    pos = bisect.bisect_left(ord_list, cur_ord)
+    if pos == 0:
+        return []
+    if tail_n is None:
+        return data_list[:pos]
+    return data_list[max(0, pos - tail_n):pos]
+
+
+def _fixture_density_features(cur_ord, hist_ords):
+    """赛程密度特征(疲劳维度): 只用严格早于当前比赛日期的已完场场次, 无未来函数
+    cur_ord: 当前比赛的日期序数; hist_ords: 该球队已完场比赛日期序数升序列表(主+客合并)
+    返回不带 h_/a_ 前缀的特征字典, 无历史场次时全为 None(由缺失指示器兼底)"""
+    feats = {k: None for k in FD_KEYS_UNDER}
+    if cur_ord is None or not hist_ords:
+        return feats
+
+    pos = bisect.bisect_left(hist_ords, cur_ord)   # 严格早于当前比赛日期的场次数
+    if pos == 0:
+        return feats
+    prev = hist_ords[:pos]
+
+    rest = cur_ord - prev[-1]
+    feats['rest_days'] = float(rest)
+    feats['is_short_rest'] = 1.0 if rest <= FIXTURE_SHORT_REST_DAYS else 0.0
+
+    for key, win in zip(['matches_last_7d', 'matches_last_14d', 'matches_last_30d'],
+                        FIXTURE_WINDOW_DAYS):
+        lo = bisect.bisect_left(prev, cur_ord - win)
+        feats[key] = float(pos - lo)
+
+    tail = prev[-6:]          # 最近6场产生5个间隔
+    if len(tail) >= 2:
+        gaps = [float(b - a) for a, b in zip(tail[:-1], tail[1:])]
+        feats['avg_rest_days_last5'] = sum(gaps) / len(gaps)
+
+    return feats
+
+
 def _league_stats_features_upside_fast(league, league_data):
     """快速版联赛统计特征(使用预加载数据)"""
     keys = ['league_n', 'league_home_win_rate', 'league_draw_rate', 'league_away_win_rate',
@@ -1070,13 +1147,15 @@ def build_features_under(conn):
                         for row in cursor.fetchall()}
     
     # 6c. 加载历史交锋数据(含半场比分、角球)
+    # 必须一并取 match_id: 需要用它推导日期做截断
     cursor.execute("""
-        SELECT home_team, away_team, score, half_score, corners
+        SELECT match_id, home_team, away_team, score, half_score, corners
         FROM head_to_head
         ORDER BY match_id
     """)
     h2h_records = cursor.fetchall()
-    h2h_df = pd.DataFrame(h2h_records, columns=['home_team', 'away_team', 'score', 'half_score', 'corners'])
+    h2h_df = pd.DataFrame(h2h_records, columns=['match_id', 'home_team', 'away_team',
+                                                'score', 'half_score', 'corners'])
 
     # 7. 预建索引加速查找
     print("⏳ 构建索引...")
@@ -1087,12 +1166,26 @@ def build_features_under(conn):
     league_matches = defaultdict(list)
     # 按球队对分组(历史交锋) - 使用head_to_head表
     h2h_matches = defaultdict(list)
+    # 按球队合并主/客场次日期序数(升序), 仅用于赛程密度特征
+    team_match_ords = defaultdict(list)
+    # 与上方各索引逐条对齐的日期序数列表, 供按当前比赛日期做截断(bisect)
+    home_team_ords = defaultdict(list)
+    away_team_ords = defaultdict(list)
+    league_ords = defaultdict(list)
+    h2h_ords = defaultdict(list)
+    n_no_date = 0   # 日期解析失败而跳过的历史行数(实测库中全为合法期号, 应为0)
     
     for _, row in history_df.iterrows():
         home = row['home_team']
         away = row['away_team']
         league = row['league']
         mid = row['match_id']
+        d_ord = _match_id_to_ord(mid)
+        if d_ord is None:
+            n_no_date += 1
+            continue    # 无日期则无法截断, 整行不入索引(避免把未来场次当成历史)
+        team_match_ords[home].append(d_ord)
+        team_match_ords[away].append(d_ord)
         tech = recent_tech_map.get(mid, {})
         match_data = {
             'match_id': mid,
@@ -1111,11 +1204,18 @@ def build_features_under(conn):
         home_team_matches[home].append(match_data)
         away_team_matches[away].append(match_data)
         league_matches[league].append(match_data)
+        home_team_ords[home].append(d_ord)
+        away_team_ords[away].append(d_ord)
+        league_ords[league].append(d_ord)
     
     # 历史交锋索引(从head_to_head表)
     for _, row in h2h_df.iterrows():
         home = row['home_team']
         away = row['away_team']
+        d_ord = _match_id_to_ord(row['match_id'])
+        if d_ord is None:
+            n_no_date += 1
+            continue
         team_pair = tuple(sorted([home, away]))
         h2h_matches[team_pair].append({
             'home_team': home,
@@ -1124,8 +1224,9 @@ def build_features_under(conn):
             'half_score': row['half_score'],
             'corners': row['corners']
         })
+        h2h_ords[team_pair].append(d_ord)
     
-    print(f"✓ 索引构建完成")
+    print(f"✓ 索引构建完成 (无日期跳过 {n_no_date} 行)")
 
     # Sequential feature computation (faster on Windows due to no memory copy overhead)
     total = len(df)
@@ -1136,30 +1237,45 @@ def build_features_under(conn):
         home = row['home_team']
         away = row['away_team']
         league = row['league']
+        # 本场日期序数: 所有"历史类"特征都用它做严格截断
+        cur_ord = _match_id_to_ord(mid)
 
         # 从内存中获取盘口数据
         af = asian_features_upside(asian_map.get(mid, []))
         ouf = over_under_features_upside(ou_map.get(mid, []))
         ef = euro_features_upside(euro_map.get(mid, []))
 
-        # 历史交锋 (使用预建索引)
+        # 历史交锋 (截断到本场日期之前, 再取最近10次交锋)
         team_pair = tuple(sorted([home, away]))
-        h2h_data = h2h_matches.get(team_pair, [])
+        h2h_data = _history_before(h2h_matches.get(team_pair, []),
+                                   h2h_ords.get(team_pair, []),
+                                   cur_ord, RECENT_FORM_WINDOW)
         h2hf = _h2h_features_upside_fast(home, away, h2h_data)
         
-        # 近期战绩 (使用预建索引)
-        home_recent_data = home_team_matches.get(home, [])[-10:]
+        # 近期战绩 (截断到本场日期之前, 主/客场各取最近10场)
+        home_recent_data = _history_before(home_team_matches.get(home, []),
+                                           home_team_ords.get(home, []),
+                                           cur_ord, RECENT_FORM_WINDOW)
         home_recent = _recent_form_features_upside_fast(home, home_recent_data, is_home=True)
-        away_recent_data = away_team_matches.get(away, [])[-10:]
+        away_recent_data = _history_before(away_team_matches.get(away, []),
+                                           away_team_ords.get(away, []),
+                                           cur_ord, RECENT_FORM_WINDOW)
         away_recent = _recent_form_features_upside_fast(away, away_recent_data, is_home=False)
         
-        # 联赛统计 (使用预建索引)
-        league_data = league_matches.get(league, [])
+        # 联赛统计 (截断到本场日期之前的全部该联赛场次, 不限场数)
+        league_data = _history_before(league_matches.get(league, []),
+                                      league_ords.get(league, []), cur_ord)
         league_stats = _league_stats_features_upside_fast(league, league_data)
+
+        # 赛程密度 (严格时间截断: 只取当前比赛日期之前的场次)
+        h_fd = _fixture_density_features(cur_ord, team_match_ords.get(home, []))
+        a_fd = _fixture_density_features(cur_ord, team_match_ords.get(away, []))
 
         # Add h_/a_ prefixes to recent form features
         home_recent_prefixed = {f'h_{k}': v for k, v in home_recent.items()}
         away_recent_prefixed = {f'a_{k}': v for k, v in away_recent.items()}
+        h_fd_prefixed = {f'h_{k}': v for k, v in h_fd.items()}
+        a_fd_prefixed = {f'a_{k}': v for k, v in a_fd.items()}
         
         # Compute combination features
         combo = {}
@@ -1201,9 +1317,15 @@ def build_features_under(conn):
             combo['form_momentum_h'] = h_win_rate - league_h_wr
         if a_win_rate is not None and league_a_wr is not None:
             combo['form_momentum_a'] = a_win_rate - league_a_wr
+        # 休息天数差 / 近期赛程负荷差(正数=主队更疲劳休息更充分或负荷更轻)
+        if h_fd['rest_days'] is not None and a_fd['rest_days'] is not None:
+            combo['rest_days_diff'] = h_fd['rest_days'] - a_fd['rest_days']
+        if h_fd['matches_last_7d'] is not None and a_fd['matches_last_7d'] is not None:
+            combo['fixture_load_diff'] = h_fd['matches_last_7d'] - a_fd['matches_last_7d']
         
         # 合并所有特征
-        feat_row = {**af, **ouf, **ef, **h2hf, **home_recent_prefixed, **away_recent_prefixed, **league_stats, **combo}
+        feat_row = {**af, **ouf, **ef, **h2hf, **home_recent_prefixed, **away_recent_prefixed,
+                    **h_fd_prefixed, **a_fd_prefixed, **league_stats, **combo}
         meta_row = row.to_dict()
         all_rows.append({**meta_row, **feat_row})
 
@@ -1242,13 +1364,23 @@ def feature_columns_under():
                   'fouls_diff', 'yellow_diff', 'form_momentum_h', 'form_momentum_a']
     
     all_keys = base_keys + h_recent_keys + a_recent_keys + combo_keys
+
+    # 赛程密度特征(2026-11-18新增): 主客各6个 + 2个差值
+    # UNDER_USE_FIXTURE_DENSITY=0 可关闭, 用于与旧特征集做 A/B 对比
+    if USE_FIXTURE_DENSITY:
+        fd_keys = ([f'h_{k}' for k in FD_KEYS_UNDER] + [f'a_{k}' for k in FD_KEYS_UNDER]
+                   + ['rest_days_diff', 'fixture_load_diff'])
+        all_keys = all_keys + fd_keys
     return all_keys
 
 
 def load_cache_under():
-    """加载UNDER模型特征缓存, 不存在返回None"""
+    """加载UNDER模型特征缓存, 不存在返回None
+    match_id 必须按字符串读: 期号有10位(当日序号<100)和11位(>=100)两种长度,
+    默认推断成 int64 后数值排序会把所有11位id甩到末尾, 打乱时间序,
+    导致按 match_id 切分/取历史集的 walk-forward 用到未来场次"""
     if os.path.exists(CACHE_FILE_UNDER):
-        return pd.read_csv(CACHE_FILE_UNDER)
+        return pd.read_csv(CACHE_FILE_UNDER, dtype={'match_id': str})
     return None
 
 
