@@ -15,6 +15,8 @@
 #   save_cache_over(df)                # 缓存到 features_over_cache.csv
 import os
 import re
+import bisect
+from datetime import datetime
 from collections import Counter, defaultdict
 from multiprocessing import Pool, cpu_count
 
@@ -49,6 +51,19 @@ MIN_OU_LINE_OVER = 2.5          # 大小球线下限(OVER模型只预测2.5球�
 
 # Time decay parameter for recent form weighting
 TIME_DECAY_LAMBDA = 0.08  # Exponential decay rate: w_i = exp(-lambda * (n-1-i))
+
+# ==================== 赛程密度特征配置 ====================
+# 2026-11-20 k7 推广: 从 UNDER(2026-11-18 新增)同构移植。因果链 = 赛程密集 -> 疲劳 -> 进攻效率下降,
+# 给模型提供时间间隔维度(现有近期战绩特征只有聚合统计)。
+# 比赛日期取自 match_id 前8位(YYYYMMDD期号): match.match_time 是 varchar 仅存'08:30'这类时刻。
+FIXTURE_WINDOW_DAYS = (7, 14, 30)   # 近期比赛场次统计窗口(天)
+FIXTURE_SHORT_REST_DAYS = 3         # 短休判定阈值: 休息<=3天视为密集
+# 赛程密度特征键(不带 h_/a_ 前缀), 主客各一份
+FD_KEYS_OVER = ['rest_days', 'matches_last_7d', 'matches_last_14d',
+                'matches_last_30d', 'avg_rest_days_last5', 'is_short_rest']
+# A/B 对比开关: 环境变量 OVER_USE_FIXTURE_DENSITY=1 可启用新特征重实验
+# 2026-11-20 A/B 按预登记未采纳(验收段 Brier/LogLoss 未改善; 回测 favor ON 但纪律回退), 默认 0
+USE_FIXTURE_DENSITY_OVER = os.environ.get('OVER_USE_FIXTURE_DENSITY', '0') != '0'
 
 
 def is_target_handicap_over(ah_cur_mean, ah_init_mean=None):
@@ -191,6 +206,48 @@ def norm_score(s):
 def is_finished(score):
     """比分字段是否为有效完场比分"""
     return bool(score) and bool(_SCORE_PAT.match(str(score).strip()))
+
+
+def _match_id_to_ord(mid):
+    """match_id 前8位(YYYYMMDD期号) -> 日期序数(天), 解析失败返回 None
+    match.match_time 仅存'08:30'这类时刻无日期, 所以用期号日期定序"""
+    s = str(mid)
+    if len(s) < 8 or not s[:8].isdigit():
+        return None
+    try:
+        return datetime.strptime(s[:8], '%Y%m%d').toordinal()
+    except ValueError:
+        return None
+
+
+def _fixture_density_features(cur_ord, hist_ords):
+    """赛程密度特征(疲劳维度): 只用严格早于当前比赛日期的已完场场次, 无未来函数
+    cur_ord: 当前比赛的日期序数; hist_ords: 该球队已完场比赛日期序数升序列表(主+客合并)
+    返回不带 h_/a_ 前缀的特征字典, 无历史场次时全为 None(由缺失指示器兼底)"""
+    feats = {k: None for k in FD_KEYS_OVER}
+    if cur_ord is None or not hist_ords:
+        return feats
+
+    pos = bisect.bisect_left(hist_ords, cur_ord)   # 严格早于当前比赛日期的场次数
+    if pos == 0:
+        return feats
+    prev = hist_ords[:pos]
+
+    rest = cur_ord - prev[-1]
+    feats['rest_days'] = float(rest)
+    feats['is_short_rest'] = 1.0 if rest <= FIXTURE_SHORT_REST_DAYS else 0.0
+
+    for key, win in zip(['matches_last_7d', 'matches_last_14d', 'matches_last_30d'],
+                        FIXTURE_WINDOW_DAYS):
+        lo = bisect.bisect_left(prev, cur_ord - win)
+        feats[key] = float(pos - lo)
+
+    tail = prev[-6:]          # 最近6场产生5个间隔
+    if len(tail) >= 2:
+        gaps = [float(b - a) for a, b in zip(tail[:-1], tail[1:])]
+        feats['avg_rest_days_last5'] = sum(gaps) / len(gaps)
+
+    return feats
 
 
 def team_similarity(name1, name2):
@@ -1159,12 +1216,21 @@ def build_features_over(conn):
     league_matches = defaultdict(list)
     # 按球队对分组(历史交锋) - 使用head_to_head表
     h2h_matches = defaultdict(list)
-    
+    # 按球队合并主/客场次日期序数(升序), 仅用于赛程密度特征
+    team_match_ords = defaultdict(list)
+    n_no_date = 0   # 日期解析失败而跳过密度索引的历史行数(实测库中全为合法期号, 应为0)
+
     for _, row in history_df.iterrows():
         home = row['home_team']
         away = row['away_team']
         league = row['league']
         mid = row['match_id']
+        d_ord = _match_id_to_ord(mid)
+        if d_ord is None:
+            n_no_date += 1   # 只影响密度索引; 其余索引保持旧行为(截断修复不在本次scope)
+        else:
+            team_match_ords[home].append(d_ord)
+            team_match_ords[away].append(d_ord)
         tech = recent_tech_map.get(mid, {})
         match_data = {
             'match_id': mid,
@@ -1197,7 +1263,9 @@ def build_features_over(conn):
             'corners': row['corners']
         })
     
-    print(f"✓ 索引构建完成")
+    for _ords in team_match_ords.values():
+        _ords.sort()
+    print(f"✓ 索引构建完成 (密度索引无日期跳过 {n_no_date} 行)")
 
     # 8. Parallel feature computation (multiprocessing)
     num_workers = min(cpu_count() - 1, 6)  # Use up to 6 processes
@@ -1220,6 +1288,8 @@ def build_features_over(conn):
         home = row['home_team']
         away = row['away_team']
         league = row['league']
+        # 本场日期序数: 赛程密度特征用它做严格截断
+        cur_ord = _match_id_to_ord(mid)
 
         # 从内存中获取盘口数据
         af = asian_features(asian_map.get(mid, []))
@@ -1241,9 +1311,15 @@ def build_features_over(conn):
         league_data = league_matches.get(league, [])
         league_stats = _league_stats_features_fast(league, league_data)
 
+        # 赛程密度 (严格时间截断: 只取当前比赛日期之前的场次)
+        h_fd = _fixture_density_features(cur_ord, team_match_ords.get(home, []))
+        a_fd = _fixture_density_features(cur_ord, team_match_ords.get(away, []))
+
         # Add h_/a_ prefixes to recent form features
         home_recent_prefixed = {f'h_{k}': v for k, v in home_recent.items()}
         away_recent_prefixed = {f'a_{k}': v for k, v in away_recent.items()}
+        h_fd_prefixed = {f'h_{k}': v for k, v in h_fd.items()}
+        a_fd_prefixed = {f'a_{k}': v for k, v in a_fd.items()}
         
         # Compute combination features
         combo = {}
@@ -1285,9 +1361,15 @@ def build_features_over(conn):
             combo['form_momentum_h'] = h_win_rate - league_h_wr
         if a_win_rate is not None and league_a_wr is not None:
             combo['form_momentum_a'] = a_win_rate - league_a_wr
-        
+        # 休息天数差 / 近期赛程负荷差(正数=主队休息更充分或负荷更轻)
+        if h_fd['rest_days'] is not None and a_fd['rest_days'] is not None:
+            combo['rest_days_diff'] = h_fd['rest_days'] - a_fd['rest_days']
+        if h_fd['matches_last_7d'] is not None and a_fd['matches_last_7d'] is not None:
+            combo['fixture_load_diff'] = h_fd['matches_last_7d'] - a_fd['matches_last_7d']
+
         # 合并所有特征
-        feat_row = {**af, **ouf, **ef, **h2hf, **home_recent_prefixed, **away_recent_prefixed, **league_stats, **combo}
+        feat_row = {**af, **ouf, **ef, **h2hf, **home_recent_prefixed, **away_recent_prefixed,
+                    **h_fd_prefixed, **a_fd_prefixed, **league_stats, **combo}
         meta_row = row.to_dict()
         all_rows.append({**meta_row, **feat_row})
 
@@ -1326,6 +1408,13 @@ def feature_columns_over():
                   'fouls_diff', 'yellow_diff', 'form_momentum_h', 'form_momentum_a']
     
     all_keys = base_keys + h_recent_keys + a_recent_keys + combo_keys
+
+    # 赛程密度特征(2026-11-20 k7推广): 主客各6个 + 2个差值
+    # OVER_USE_FIXTURE_DENSITY=0 可关闭, 用于与旧特征集做 A/B 对比
+    if USE_FIXTURE_DENSITY_OVER:
+        fd_keys = ([f'h_{k}' for k in FD_KEYS_OVER] + [f'a_{k}' for k in FD_KEYS_OVER]
+                   + ['rest_days_diff', 'fixture_load_diff'])
+        all_keys = all_keys + fd_keys
     return all_keys
 
 
