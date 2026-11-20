@@ -256,6 +256,7 @@ def train_over(df_train, df_valid, feats, verbose=True):
 
     # --- 2. 泊松进球模型 ---
     goals_models = {}
+    goals_early = {}   # 早停模型(仅train训练): 供α选择做样本外DC预测, 防泄漏
     lambdas_va = {}
     for side in ['home', 'away']:
         gm = lgb.LGBMRegressor(**LGB_POISSON_PARAMS)
@@ -272,6 +273,7 @@ def train_over(df_train, df_valid, feats, verbose=True):
         y_all = pd.concat([y_tr_goals, y_va_goals])
         gm_final.fit(X_all, y_all)
         goals_models[side] = gm_final
+        goals_early[side] = gm
         # rho拟合用训练集内的λ估计(避免valid信息泄漏到rho)
         lambdas_va[side] = np.clip(gm.predict(X_tr), 0.1, 4.5)
 
@@ -283,14 +285,22 @@ def train_over(df_train, df_valid, feats, verbose=True):
     p_lgb_va = clf.predict_proba(X_va)[:, 1]
     lh_va = np.clip(goals_models['home'].predict(X_va), 0.1, 4.5)
     la_va = np.clip(goals_models['away'].predict(X_va), 0.1, 4.5)
+    # 防泄漏护栏: α选择时DC侧改用早停模型(仅train训练), 使p_lgb/p_dc在valid上
+    # 同为样本外。旧逻辑用gm_final(train+valid重训)预测valid, DC侧样本内AUC虚高
+    # (实测0.82 vs 样本外0.53), Brier比较系统性偏袒DC, 导致α恒为0、筛选门被旁路。
+    # 阈值选择与生产预测仍用final模型的λ, 不受影响。
+    lh_va_oos = np.clip(goals_early['home'].predict(X_va), 0.1, 4.5)
+    la_va_oos = np.clip(goals_early['away'].predict(X_va), 0.1, 4.5)
     p_dc_va = np.array([matrix_pool_prob(dc_matrix(h, a, rho))
-                        for h, a in zip(lh_va, la_va)])
+                        for h, a in zip(lh_va_oos, la_va_oos)])
 
     best_alpha, best_brier = 0.5, np.inf
-    for alpha in [round(x * 0.1, 1) for x in range(11)]:
+    # 从1.0递减遍历+严格<(1e-9容差): 近似并列时保留先遇到的较大α(含LGBM的融合),
+    # 避免旧逻辑(升序+严格<)在并列时系统性丢弃筛选门
+    for alpha in [round(x * 0.1, 1) for x in range(10, -1, -1)]:
         p = alpha * p_lgb_va + (1 - alpha) * p_dc_va
         b = brier_score_loss(y_va, p)
-        if b < best_brier:
+        if b < best_brier - 1e-9:
             best_brier, best_alpha = b, alpha
     p_fused_va = best_alpha * p_lgb_va + (1 - best_alpha) * p_dc_va
 
