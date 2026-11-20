@@ -295,6 +295,7 @@ def train_upside_model(df_train, df_valid, feats, verbose=True):
     
     # --- 泊松进球模型 + 全局rho(参考UNDER三阶段, 供8池输出具体比分) ---
     goals_models = {}
+    goals_early = {}   # 早停模型(仅train训练): 供α选择做样本外DC预测, 防泄漏
     lambdas_tr = {}
     for side in ['home', 'away']:
         gm = lgb.LGBMRegressor(**LGB_POISSON_PARAMS)
@@ -311,6 +312,7 @@ def train_upside_model(df_train, df_valid, feats, verbose=True):
         y_all = pd.concat([y_tr_goals, y_va_goals])
         gm_final.fit(X_all, y_all)
         goals_models[side] = gm_final
+        goals_early[side] = gm
         lambdas_tr[side] = np.clip(gm.predict(X_tr), 0.1, 4.5)
     goals_tr = list(zip(df_train['home_goals'], df_train['away_goals']))
     rho = fit_rho(lambdas_tr['home'], lambdas_tr['away'], goals_tr)
@@ -327,16 +329,19 @@ def train_upside_model(df_train, df_valid, feats, verbose=True):
     pool_clf_final.fit(X_all, pd.concat([y_pool_tr, y_pool_va]))
     
     p_lgb_pool_va = pool_clf.predict_proba(X_va)[:, 1]
-    lh_va = np.clip(goals_models['home'].predict(X_va), 0.1, 4.5)
-    la_va = np.clip(goals_models['away'].predict(X_va), 0.1, 4.5)
+    # 防泄漏护栏(同UNDER 8827e75): α选择时DC侧改用早停模型(仅train训练),
+    # 使p_lgb_pool/p_dc在valid上同为样本外; 阈值选择与生产预测仍用final模型。
+    lh_va = np.clip(goals_early['home'].predict(X_va), 0.1, 4.5)
+    la_va = np.clip(goals_early['away'].predict(X_va), 0.1, 4.5)
     p_dc_va = np.array([matrix_pool_prob(dc_matrix(h, a, rho))
                         for h, a in zip(lh_va, la_va)])
     
     best_alpha, best_brier = 0.5, np.inf
-    for alpha in [round(x * 0.1, 1) for x in range(11)]:
+    # 从1.0递减遍历+严格<(1e-9容差): 近似并列时保留含LGBM的融合
+    for alpha in [round(x * 0.1, 1) for x in range(10, -1, -1)]:
         p = alpha * p_lgb_pool_va + (1 - alpha) * p_dc_va
         b = brier_score_loss(y_pool_va, p)
-        if b < best_brier:
+        if b < best_brier - 1e-9:
             best_brier, best_alpha = b, alpha
     p_fused_va = best_alpha * p_lgb_pool_va + (1 - best_alpha) * p_dc_va
     

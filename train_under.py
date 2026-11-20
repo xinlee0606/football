@@ -80,6 +80,9 @@ LGB_POISSON_PARAMS = dict(
     verbosity=-1,
 )
 RHO_GRID = [round(x * 0.02, 2) for x in range(-15, 16)]   # -0.30~0.30
+# 策略阈值(2026-11-20决策: 走质量档)。α泄漏修复后概率标度诚实,
+# 回测0.80档池内命中80.7%/每场+1.24为全档最高; 不再用valid EV自动选档。
+POLICY_THRESHOLD_UNDER = 0.80
 
 
 def _eval_kwargs(X, y):
@@ -313,6 +316,7 @@ def train_over(df_train, df_valid, feats, verbose=True):
     threshold, ev_curve = choose_threshold(
         p_calib_va, lh_va, la_va, rho, sp_va,
         df_valid['score'].values)
+    threshold = POLICY_THRESHOLD_UNDER   # 策略覆盖: ev_curve仍保留供报告
 
     model = {
         'clf': clf_final, 'goals': goals_models, 'calib': calib,
