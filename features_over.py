@@ -65,6 +65,12 @@ FD_KEYS_OVER = ['rest_days', 'matches_last_7d', 'matches_last_14d',
 # 2026-11-20 A/B 按预登记未采纳(验收段 Brier/LogLoss 未改善; 回测 favor ON 但纪律回退), 默认 0
 USE_FIXTURE_DENSITY_OVER = os.environ.get('OVER_USE_FIXTURE_DENSITY', '0') != '0'
 
+# ==================== 历史窗口截断配置 ====================
+# 2026-11-21 修复: 近期战绩/联赛统计/历史交锋三处特征原先按"索引列表末尾"取值,
+# 相当于用建表时刻的最后N场(含未来场次, 且包含本场自身), 属未来函数且与线上预测口径不一致。
+# 现统一按当前比赛日期严格截断(移植 UNDER 2026-11-18 修复)。
+RECENT_FORM_WINDOW = 10   # 近期战绩/历史交锋各取截断后的最近N场
+
 
 def is_target_handicap_over(ah_cur_mean, ah_init_mean=None):
     """判断盘口均值是否在目标盘口范围内（训练口径）"""
@@ -218,6 +224,20 @@ def _match_id_to_ord(mid):
         return datetime.strptime(s[:8], '%Y%m%d').toordinal()
     except ValueError:
         return None
+
+
+def _history_before(data_list, ord_list, cur_ord, tail_n=None):
+    """从按日期升序的历史索引中, 取严格早于当前比赛日期的场次
+    data_list/ord_list 必须索引逐条对齐; tail_n 不为空时再取其中最近 tail_n 场
+    cur_ord 解析不出来时返回空列表 —— 宁缺勿漏, 不能退化成"全部历史"带未来场次"""
+    if cur_ord is None or not ord_list:
+        return []
+    pos = bisect.bisect_left(ord_list, cur_ord)
+    if pos == 0:
+        return []
+    if tail_n is None:
+        return data_list[:pos]
+    return data_list[max(0, pos - tail_n):pos]
 
 
 def _fixture_density_features(cur_ord, hist_ords):
@@ -1200,12 +1220,12 @@ def build_features_over(conn):
     
     # 6c. 加载历史交锋数据(含半场比分、角球)
     cursor.execute("""
-        SELECT home_team, away_team, score, half_score, corners
+        SELECT match_id, home_team, away_team, score, half_score, corners
         FROM head_to_head
         ORDER BY match_id
     """)
     h2h_records = cursor.fetchall()
-    h2h_df = pd.DataFrame(h2h_records, columns=['home_team', 'away_team', 'score', 'half_score', 'corners'])
+    h2h_df = pd.DataFrame(h2h_records, columns=['match_id', 'home_team', 'away_team', 'score', 'half_score', 'corners'])
 
     # 7. 预建索引加速查找
     print("⏳ 构建索引...")
@@ -1216,9 +1236,14 @@ def build_features_over(conn):
     league_matches = defaultdict(list)
     # 按球队对分组(历史交锋) - 使用head_to_head表
     h2h_matches = defaultdict(list)
-    # 按球队合并主/客场次日期序数(升序), 仅用于赛程密度特征
+    # 按球队合并主/客场次日期序数(升序), 用于赛程密度特征
     team_match_ords = defaultdict(list)
-    n_no_date = 0   # 日期解析失败而跳过密度索引的历史行数(实测库中全为合法期号, 应为0)
+    # 与上方各索引逐条对齐的日期序数列表, 供按当前比赛日期做截断(bisect)
+    home_team_ords = defaultdict(list)
+    away_team_ords = defaultdict(list)
+    league_ords = defaultdict(list)
+    h2h_ords = defaultdict(list)
+    n_no_date = 0   # 日期解析失败而跳过的历史行数(实测库中全为合法期号, 应为0)
 
     for _, row in history_df.iterrows():
         home = row['home_team']
@@ -1227,10 +1252,13 @@ def build_features_over(conn):
         mid = row['match_id']
         d_ord = _match_id_to_ord(mid)
         if d_ord is None:
-            n_no_date += 1   # 只影响密度索引; 其余索引保持旧行为(截断修复不在本次scope)
-        else:
-            team_match_ords[home].append(d_ord)
-            team_match_ords[away].append(d_ord)
+            n_no_date += 1
+            continue    # 无日期则无法截断, 整行不入索引(避免把未来场次当成历史)
+        team_match_ords[home].append(d_ord)
+        team_match_ords[away].append(d_ord)
+        home_team_ords[home].append(d_ord)
+        away_team_ords[away].append(d_ord)
+        league_ords[league].append(d_ord)
         tech = recent_tech_map.get(mid, {})
         match_data = {
             'match_id': mid,
@@ -1254,6 +1282,10 @@ def build_features_over(conn):
     for _, row in h2h_df.iterrows():
         home = row['home_team']
         away = row['away_team']
+        d_ord = _match_id_to_ord(row['match_id'])
+        if d_ord is None:
+            n_no_date += 1
+            continue
         team_pair = tuple(sorted([home, away]))
         h2h_matches[team_pair].append({
             'home_team': home,
@@ -1262,10 +1294,11 @@ def build_features_over(conn):
             'half_score': row['half_score'],
             'corners': row['corners']
         })
+        h2h_ords[team_pair].append(d_ord)
     
     for _ords in team_match_ords.values():
         _ords.sort()
-    print(f"✓ 索引构建完成 (密度索引无日期跳过 {n_no_date} 行)")
+    print(f"✓ 索引构建完成 (无日期跳过 {n_no_date} 行)")
 
     # 8. Parallel feature computation (multiprocessing)
     num_workers = min(cpu_count() - 1, 6)  # Use up to 6 processes
@@ -1288,7 +1321,7 @@ def build_features_over(conn):
         home = row['home_team']
         away = row['away_team']
         league = row['league']
-        # 本场日期序数: 赛程密度特征用它做严格截断
+        # 本场日期序数: 所有"历史类"特征都用它做严格截断
         cur_ord = _match_id_to_ord(mid)
 
         # 从内存中获取盘口数据
@@ -1296,19 +1329,26 @@ def build_features_over(conn):
         ouf = over_under_features(ou_map.get(mid, []))
         ef = euro_features(euro_map.get(mid, []))
 
-        # 历史交锋 (使用预建索引)
+        # 历史交锋 (截断到本场日期之前, 再取最近10次交锋)
         team_pair = tuple(sorted([home, away]))
-        h2h_data = h2h_matches.get(team_pair, [])
+        h2h_data = _history_before(h2h_matches.get(team_pair, []),
+                                   h2h_ords.get(team_pair, []),
+                                   cur_ord, RECENT_FORM_WINDOW)
         h2hf = _h2h_features_fast(home, away, h2h_data)
-        
-        # 近期战绩 (使用预建索引)
-        home_recent_data = home_team_matches.get(home, [])[-10:]
+
+        # 近期战绩 (截断到本场日期之前, 主/客场各取最近10场)
+        home_recent_data = _history_before(home_team_matches.get(home, []),
+                                           home_team_ords.get(home, []),
+                                           cur_ord, RECENT_FORM_WINDOW)
         home_recent = _recent_form_features_fast(home, home_recent_data, is_home=True)
-        away_recent_data = away_team_matches.get(away, [])[-10:]
+        away_recent_data = _history_before(away_team_matches.get(away, []),
+                                           away_team_ords.get(away, []),
+                                           cur_ord, RECENT_FORM_WINDOW)
         away_recent = _recent_form_features_fast(away, away_recent_data, is_home=False)
-        
-        # 联赛统计 (使用预建索引)
-        league_data = league_matches.get(league, [])
+
+        # 联赛统计 (截断到本场日期之前的全部该联赛场次, 不限场数)
+        league_data = _history_before(league_matches.get(league, []),
+                                      league_ords.get(league, []), cur_ord)
         league_stats = _league_stats_features_fast(league, league_data)
 
         # 赛程密度 (严格时间截断: 只取当前比赛日期之前的场次)
