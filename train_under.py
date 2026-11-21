@@ -392,7 +392,11 @@ def predict_rows(model, df):
     feats = model['feats']
     # 只使用数据框中实际存在的特征（兼容不同版本的特征集）
     available_feats = [f for f in feats if f in d.columns]
-    missing_feats = [f for f in feats if f not in d.columns]
+    # 2026-11-21: base特征对应的缺失指示器下方会自建, 不算缺失; 只对真缺失告警(消除误报洪水)
+    auto_indicators = ({f'{c}_missing' for c in available_feats
+                       if not c.endswith('_missing')} if 'medians' in model else set())
+    missing_feats = [f for f in feats
+                     if f not in d.columns and f not in auto_indicators]
     if missing_feats:
         print(f"⚠ 模型期望{len(feats)}个特征，数据框只有{len(available_feats)}个，缺少{len(missing_feats)}个：{missing_feats[:5]}...")
     X = d[available_feats]   # 保留列名 (与训练时一致，避免 sklearn 特征名校验警告)
@@ -402,15 +406,14 @@ def predict_rows(model, df):
         # 只填充模型实际使用的特征
         fill_medians = {k: v for k, v in medians.items() if k in X.columns}
         # 添加缺失指示器(只为原始特征创建,不为指示器本身创建)
-        indicator_cols = []
-        for col in feats:
-            if col.endswith('_missing'):  # 跳过已有的指示器列
-                continue
-            if col not in X.columns:
-                continue
-            indicator_name = f'{col}_missing'
-            X[indicator_name] = X[col].isnull().astype(int)
-            indicator_cols.append(indicator_name)
+        # 2026-11-21: 一次性构建+单次concat拼列, 替代逐列loop, 消除
+        # PerformanceWarning: DataFrame is highly fragmented; 列顺序与旧实现一致
+        indicators = {f'{col}_missing': X[col].isnull().astype(int)
+                      for col in feats
+                      if not col.endswith('_missing') and col in X.columns}
+        indicator_cols = list(indicators.keys())
+        if indicators:
+            X = pd.concat([X, pd.DataFrame(indicators, index=X.index)], axis=1)
         # 更新feats以包含指示器列
         feats = [f for f in feats if f in X.columns] + indicator_cols
         X = X.fillna(fill_medians)
