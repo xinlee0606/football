@@ -4,7 +4,8 @@
 #   2. 之后每个自然月为一个回测窗口: 用该月之前全部数据训练(内部再切15%调参),
 #      预测该月比赛 -> 逐段滚动直到数据末端(模拟真实使用+持续学习)
 #   3. 评估: 筛选后池内命中率 / Top9比分命中率 / Brier / 对数损失
-#   4. EV: 关联result_sp开奖SP, 每场Top9比分各投1元的实现盈亏与模型期望EV
+#   4. EV: 关联result_sp开奖SP, 按北单实际规则的实现盈亏(每注2元共18元, 中奖赔付2*SP*0.65)
+#      与模型期望EV; 旧1元/注口径保留为对照列 (2026-11-21 口径修正)
 #   5. 阈值敏感性: 不同P_pool阈值下的命中率与EV曲线(定投注纪律用)
 #
 # 与OVER模型差异:
@@ -105,8 +106,11 @@ def summarize(records, title):
     print(f"Top3精确比分命中率: {rate(top3_hit, n)}")
 
     # 阈值敏感性
+    # 2026-11-21 口径修正: 实现盈亏按北单实际规则(9注×2元=18元, 中奖赔2*SP*0.65):
+    #   中 -> 1.3*SP-18, 未中 -> -18; 旧口径(每注1元: 中SP-9/未中-9)仅作对照列
+    #   模型EV同步换算: 实际 = 1.3×旧 - 6.3 (predict_rows的ev_model仍为1元口径)
     print(f"\n  {'阈值':<7}{'场数':>7}{'覆盖率':>8}{'池内命中率':>12}"
-          f"{'Top9命中':>12}{'实现盈亏':>10}{'模型EV':>9}")
+          f"{'Top9命中':>12}{'实际盈亏':>10}{'旧口径':>8}{'模型EV':>9}")
     th_rows = []
     for th in [0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80]:
         sel = [r for r in records if r['p_pool'] >= th]
@@ -114,26 +118,30 @@ def summarize(records, title):
             continue
         s_hit = sum(r['in_pool'] for r in sel)
         s_top9 = sum(r['hit_top9'] for r in sel)
-        # 实现盈亏: 每场9注各1元, 命中Top9 -> +SP-9, 否则 -9
-        profits = []
+        profits = []      # 北单实际口径: 中1.3*SP-18 / 未中-18
+        profits_old = []  # 旧1元口径(对照): 中SP-9 / 未中-9
         evs = []
         for r in sel:
             if r['sp'] is not None:
-                profits.append((r['sp'] - TOP_PICKS) if r['hit_top9'] else -TOP_PICKS)
+                profits.append((1.3 * r['sp'] - 18.0) if r['hit_top9'] else -18.0)
+                profits_old.append((r['sp'] - TOP_PICKS) if r['hit_top9']
+                                   else -float(TOP_PICKS))
             if r['ev_model'] is not None:
-                evs.append(r['ev_model'])
+                evs.append(1.3 * r['ev_model'] - 6.3)
         profit_str = f"{np.mean(profits):+.2f}" if profits else '-'
+        profit_old_str = f"{np.mean(profits_old):+.2f}" if profits_old else '-'
         ev_str = f"{np.mean(evs):+.2f}" if evs else '-'
         print(f"  >={th:.2f} {len(sel):>6}{len(sel) / n * 100:>7.1f}%"
               f"{s_hit / len(sel) * 100:>11.1f}%"
               f"{s_top9 / len(sel) * 100:>11.1f}%"
-              f"{profit_str:>10}{ev_str:>9}")
+              f"{profit_str:>10}{profit_old_str:>8}{ev_str:>9}")
         th_rows.append({
             'threshold': th, 'n': len(sel),
             'coverage': round(len(sel) / n, 4),
             'pool_hit_rate': round(s_hit / len(sel), 4),
             'top9_hit_rate': round(s_top9 / len(sel), 4),
             'realized_profit_per_match': round(float(np.mean(profits)), 3) if profits else None,
+            'realized_profit_per_match_1yuan': round(float(np.mean(profits_old)), 3) if profits_old else None,
             'model_ev_per_match': round(float(np.mean(evs)), 3) if evs else None,
         })
     return th_rows
@@ -208,6 +216,7 @@ def main():
         'pool_scores': list(UNDER),
         'top_picks': TOP_PICKS,
         'sp_coverage': f"{sp_n}/{len(records)}",
+        'profit_caliber': '北单实际: 中1.3*SP-18 / 未中-18 (2026-11-21修正; 旧1元口径见*_1yuan字段)',
         'threshold_sensitivity': th_rows,
         'monthly': m_rows,
     }
