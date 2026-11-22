@@ -168,6 +168,22 @@ def monthly_table(records):
     return rows
 
 
+# ==================== 联赛黑名单 ====================
+def compute_league_blacklist(records, min_n=30, gap=0.04):
+    """按联赛统计滚动样本池内率(全部合格场, 非推荐档), n>=min_n 且低于整体基线gap
+    以上进黑名单; 供 predict_under.load_blacklist 从本回测结果JSON读取.
+    规则与 logs/league_bl_validate.py 样本外验证一致(验证窗切分20260822)."""
+    by = {}
+    for r in records:
+        by.setdefault(str(r['league']), []).append(r['in_pool'])
+    base = sum(r['in_pool'] for r in records) / len(records)
+    stats = {lg: {'n': len(v), 'pool_rate': round(sum(v) / len(v), 4)}
+             for lg, v in by.items()}
+    blacklist = sorted(lg for lg, s in stats.items()
+                       if s['n'] >= min_n and s['pool_rate'] <= base - gap)
+    return blacklist, stats, base
+
+
 # ==================== 主流程 ====================
 def main():
     ap = argparse.ArgumentParser()
@@ -206,6 +222,12 @@ def main():
     print("#" * 66)
     th_rows = summarize(records, "总体(全部滚动窗口)")
     m_rows = monthly_table(records)
+    bl, bl_stats, bl_base = compute_league_blacklist(records)
+    print(f"\n联赛黑名单({len(bl)}个, 整体基线{bl_base*100:.1f}%, 规则n>=30且池内率<=基线-4pp):")
+    print('  ' + '、'.join(bl) if bl else '  无')
+    for lg in bl:
+        s = bl_stats[lg]
+        print(f"    {lg:<12} n{s['n']:>4}  池内率 {s['pool_rate']*100:5.1f}%")
 
     sp_n = sum(1 for r in records if r['sp'] is not None)
     data = {
@@ -217,6 +239,9 @@ def main():
         'top_picks': TOP_PICKS,
         'sp_coverage': f"{sp_n}/{len(records)}",
         'profit_caliber': '北单实际: 中1.3*SP-18 / 未中-18 (2026-11-21修正; 旧1元口径见*_1yuan字段)',
+        'league_blacklist': bl,
+        'blacklist_rule': '滚动样本按联赛池内率, n>=30且<=整体基线-4pp (2026-11-22新增, predict_under读取)',
+        'league_blacklist_stats': {lg: bl_stats[lg] for lg in bl},
         'threshold_sensitivity': th_rows,
         'monthly': m_rows,
     }
