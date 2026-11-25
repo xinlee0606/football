@@ -268,6 +268,9 @@ def review(target_date, send_mail=True):
         mi = info.get(mid, {})
         single = str(mi.get('single') or '').strip()
         single_part = f"[{single}]" if single else "[-]"
+        # 联赛标识: 读jsonl推荐记录的league(旧记录缺字段显示[-])
+        lg = str(e.get('league') or '').strip()
+        lg_part = lg if lg else "[-]"
         vs = f"{mi.get('home', '?')} vs {mi.get('away', '?')}"
         sc = mi.get('score')
         flag = '★推荐' if picked else '  -   '
@@ -296,7 +299,7 @@ def review(target_date, send_mail=True):
             sc_str = str(sc) if sc else '-'
         if picked:
             n_picked += 1
-        out(f"{mid}  {single_part}  {flag}  池内{pstr:>7}  {vs}  "
+        out(f"{mid}  {single_part}  {lg_part}  {flag}  池内{pstr:>7}  {vs}  "
             f"实际[{sc_str} {sp_str}]  投注:{top9}  -> {hit}")
         
         # 推荐场次显示技术统计对比
