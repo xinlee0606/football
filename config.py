@@ -1,4 +1,5 @@
 # config.py - 爬虫配置文件
+import os
 
 # ==================== 数据库配置 ====================
 DB_CONFIG = {
@@ -23,6 +24,13 @@ PAGE_LOAD_TIMEOUT = 30           # 页面加载超时(秒)
 ELEMENT_WAIT_TIMEOUT = 15        # 元素等待超时(秒)
 REQUEST_DELAY = 2                # 请求间隔(秒), 避免被封
 MATCH_LIST_WAIT = 10             # 等待比赛列表加载时间(秒)
+
+# ==================== titan007 登录 Cookie ====================
+# 亚盘(AsianOdds_n.aspx)/大小球(OverDown_n.aspx)专页自2026-11-24起需登录态才返回数据
+# (欧赔走1x2d JS接口不受影响). 登录页需图形码+RSA加密, 无人值守自动登录脆弱,
+# 故采用浏览器导出Cookie注入方案. 将从浏览器复制的cookie串(形如 Auth=xxx; loginsameinfo=yyy)
+# 写入 TITAN_COOKIE_FILE 指向的文件; 该文件已加入.gitignore, 严禁提交到仓库.
+TITAN_COOKIE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'titan_cookie.txt')
 
 # ==================== 目标URL ====================
 MAIN_URL = 'https://live.titan007.com/oldIndexall.aspx'

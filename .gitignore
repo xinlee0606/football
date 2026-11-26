@@ -17,3 +17,7 @@ __pycache__/
 .venv/
 # Backup
 *.bak*
+
+# Secrets (titan007登录Cookie / 环境变量, 严禁提交)
+titan_cookie.txt
+.env

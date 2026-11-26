@@ -17,7 +17,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
-from config import DB_CONFIG, CHROME_HEADLESS, ELEMENT_WAIT_TIMEOUT, REQUEST_DELAY, MATCH_LIST_WAIT, MAIN_URL, TEAM_NAME_LANGUAGE, OVER_URL_TEMPLATE, CHROME_BINARY_PATH, PAGE_LOAD_TIMEOUT, CHROME_PROXY
+from config import DB_CONFIG, CHROME_HEADLESS, ELEMENT_WAIT_TIMEOUT, REQUEST_DELAY, MATCH_LIST_WAIT, MAIN_URL, TEAM_NAME_LANGUAGE, OVER_URL_TEMPLATE, CHROME_BINARY_PATH, PAGE_LOAD_TIMEOUT, CHROME_PROXY, TITAN_COOKIE_FILE
 
 # Linux服务器强制Selenium Manager离线模式(无法联网下载驱动); Windows本地开发不设置(需联网获取驱动)
 if sys.platform.startswith('linux'):
@@ -116,6 +116,45 @@ class TitanScraper:
         self._browser_proxy = proxy
         self._browser_headless = headless
         self._browser_extra_args = extra_args or []
+        # 注入titan007登录Cookie(亚盘/大小球专页需登录); tab崩溃重启时同样复用
+        self._inject_login_cookie()
+
+    def _inject_login_cookie(self):
+        """注入titan007登录Cookie: 亚盘(AsianOdds_n.aspx)/大小球(OverDown_n.aspx)专页
+        自2026-11-24起需登录态才返回数据(否则命中"登录免费查看数据"墙, 无盘口表格).
+        Cookie存于gitignore密钥文件TITAN_COOKIE_FILE, 内容为浏览器复制的cookie串
+        (形如 Auth=xxx; loginsameinfo=yyy, 支持分号或换行分隔). 文件缺失则跳过并告警."""
+        if not TITAN_COOKIE_FILE or not os.path.isfile(TITAN_COOKIE_FILE):
+            print("⚠ 未找到titan007登录Cookie文件(titan_cookie.txt), "
+                  "亚盘/大小球将因登录墙抓取失败")
+            return
+        try:
+            with open(TITAN_COOKIE_FILE, encoding='utf-8') as f:
+                raw = f.read().strip()
+        except Exception as e:
+            print(f"⚠ 读取Cookie文件失败: {e}")
+            return
+        # add_cookie要求先处于目标域下: 打开免登录的live首页建立.titan007.com域上下文
+        try:
+            self.driver.get('https://live.titan007.com/')
+        except Exception:
+            pass
+        n = 0
+        for part in re.split(r'[;\n]', raw):
+            part = part.strip()
+            if not part or '=' not in part:
+                continue
+            name, _, value = part.partition('=')
+            name, value = name.strip(), value.strip()
+            if not name:
+                continue
+            try:
+                self.driver.add_cookie({'name': name, 'value': value,
+                                        'domain': '.titan007.com', 'path': '/'})
+                n += 1
+            except Exception as e:
+                print(f"    ⚠ Cookie注入失败 {name}: {str(e).splitlines()[0]}")
+        print(f"✓ 已注入titan007登录Cookie {n} 项 (亚盘/大小球登录墙页面将可用)")
 
     def _restart_browser(self):
         """Tab崩溃时重启浏览器（复用初始化参数），释放内存后继续爬取"""
@@ -1608,7 +1647,11 @@ class TitanScraper:
         if not self._safe_get(asian_url):
             print("    ✗ 亚盘专页加载失败")
             return
-        time.sleep(5)
+        # 登录后亚盘表格仍由JS异步渲染, 固定sleep易在渲染完成前取空表; 轮询等待表头出现(最多12秒)
+        for _ in range(12):
+            time.sleep(1)
+            if '公司' in self.driver.page_source:
+                break
 
         soup = BeautifulSoup(self.driver.page_source, 'html.parser')
         odds_data = []
@@ -1627,7 +1670,7 @@ class TitanScraper:
                 break
 
         if not target_table:
-            print("    ✗ 未找到亚盘表格")
+            print("    ✗ 未找到亚盘表格(可能命中登录墙, 请检查titan_cookie.txt是否有效/过期)")
             return
 
         # 解析亚盘专页表格
@@ -1714,7 +1757,11 @@ class TitanScraper:
         if not self._safe_get(over_url):
             print("    ✗ 大小球专页加载失败")
             return
-        time.sleep(5)
+        # 登录后大小球表格仍由JS异步渲染, 固定sleep易在渲染完成前取空表; 轮询等待表头出现(最多12秒)
+        for _ in range(12):
+            time.sleep(1)
+            if '公司' in self.driver.page_source:
+                break
 
         soup = BeautifulSoup(self.driver.page_source, 'html.parser')
         odds_data = []
@@ -1733,7 +1780,7 @@ class TitanScraper:
                 break
 
         if not target_table:
-            print("    ✗ 未找到大小球表格")
+            print("    ✗ 未找到大小球表格(可能命中登录墙, 请检查titan_cookie.txt是否有效/过期)")
             return
 
         # 解析大小球专页表格
