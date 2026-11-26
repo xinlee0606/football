@@ -21,3 +21,5 @@ __pycache__/
 # Secrets (titan007登录Cookie / 环境变量, 严禁提交)
 titan_cookie.txt
 .env
+# Cookie健康检查状态文件(运行时生成, 不入库)
+logs/titan_cookie_state.txt
